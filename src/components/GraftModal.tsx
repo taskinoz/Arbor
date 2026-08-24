@@ -114,6 +114,9 @@ export const GraftModal: React.FC<GraftModalProps> = ({
                 onChange={(e) => setPath(e.target.value)}
                 disabled={submitting}
                 autoFocus
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
               />
               <span className="form-help">
                 Relative folder names will be created in:<br />
