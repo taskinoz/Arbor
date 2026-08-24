@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FolderGit2, Plus, Trash2, X, Check, Loader2, FolderOpen } from 'lucide-react';
+import { Plus, Trash2, X, Check, Loader2, FolderOpen } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 
 interface SidebarProps {
@@ -66,7 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <FolderGit2 className="logo-icon" size={28} />
+        <img src="/logo.png" alt="Arbor" className="logo-icon" style={{ width: 28, height: 28, objectFit: 'contain' }} />
         <span className="logo-text">Arbor</span>
       </div>
 
