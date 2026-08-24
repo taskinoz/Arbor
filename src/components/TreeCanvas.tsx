@@ -51,8 +51,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     
     const angleRad = (angleDeg * Math.PI) / 180;
     
-    // Length alternates to create depth and spacing
-    const length = 150 + (index % 2) * 45 + Math.min(index * 8, 40);
+    // Length varies (3-tier stagger, plus a boost as more branches are added)
+    // to keep neighboring nodes/labels from landing on top of each other.
+    const spreadBoost = Math.min(K * 3, 40);
+    const length = 150 + spreadBoost + (index % 3) * 25 + Math.min(index * 5, 40);
     
     // Forking point on the main trunk. Branches fork between rootY (410) and trunkEndY (260)
     let yFork = rootY - 30;
@@ -93,20 +95,46 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     return parts[parts.length - 1] || path;
   };
 
-  return (
-    <div className="canvas-container">
-      {isLoading ? (
+  // Long branch/folder names get cut short in the tree itself (with the full
+  // name available as a native tooltip) so labels stay legible and don't
+  // sprawl into neighboring nodes.
+  const truncateLabel = (text: string, maxLen = 16) => {
+    if (text.length <= maxLen) return text;
+    return `${text.slice(0, maxLen - 1)}…`;
+  };
+
+  // Only take over the whole area with a spinner when we have nothing to show yet.
+  // Once a tree has rendered, switching/refreshing worktrees dims it and overlays
+  // a spinner instead, so the view doesn't blank out and lose context.
+  if (isLoading && worktrees.length === 0) {
+    return (
+      <div className="canvas-container">
         <div className="empty-state">
           <RefreshCw className="empty-icon loading-spinner" size={48} />
           <p className="empty-title">Reading git repository...</p>
         </div>
-      ) : worktrees.length === 0 ? (
+      </div>
+    );
+  }
+
+  return (
+    <div className="canvas-container">
+      {isLoading && (
+        <div className="canvas-loading-overlay">
+          <RefreshCw className="loading-spinner" size={28} />
+          <span>Refreshing worktrees...</span>
+        </div>
+      )}
+      {worktrees.length === 0 ? (
         <div className="empty-state">
           <p className="empty-title">No worktrees detected</p>
           <p className="empty-desc">This shouldn't happen for a valid git repo. Make sure the repository exists.</p>
         </div>
       ) : (
-        <svg viewBox={`0 0 ${width} ${height}`} className="tree-svg">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className={`tree-svg ${isLoading ? 'is-loading' : ''}`}
+        >
           {/* Definitions for SVG gradients and filters */}
           <defs>
             <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
@@ -161,11 +189,14 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             const statusClass = b.wt.is_clean ? 'clean' : 'dirty';
             const label = getBranchLabel(b.wt);
             const folder = getFolderLabel(b.wt.path);
-            
+
             // Text alignment: shift text to avoid overlap
             const isLeft = b.leafX < rootX;
             const textAnchor = isLeft ? 'end' : 'start';
-            const textOffsetX = isLeft ? -18 : 18;
+            // Stagger the label's distance from its node (alternating per index)
+            // so labels on nearby branches don't sit directly on top of one another.
+            const staggerDist = 18 + (i % 3) * 7;
+            const textOffsetX = isLeft ? -staggerDist : staggerDist;
 
             return (
               <g
@@ -195,14 +226,15 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   filter={isSelected || hoveredWt === b.wt.path ? 'url(#glow)' : undefined}
                 />
                 
-                {/* Labels */}
+                {/* Labels (truncated with a native tooltip for the full name) */}
                 <text
                   x={b.leafX + textOffsetX}
                   y={b.leafY - 2}
                   textAnchor={textAnchor}
                   className="node-text"
                 >
-                  {label}
+                  <title>{label}</title>
+                  {truncateLabel(label)}
                 </text>
                 <text
                   x={b.leafX + textOffsetX}
@@ -210,7 +242,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   textAnchor={textAnchor}
                   className="node-subtext"
                 >
-                  {folder}
+                  <title>{b.wt.path}</title>
+                  {truncateLabel(folder)}
                 </text>
               </g>
             );
@@ -266,7 +299,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   className="node-text"
                   style={{ fontWeight: 'bold' }}
                 >
-                  {label} (Root)
+                  <title>{label}</title>
+                  {truncateLabel(label, 20)} (Root)
                 </text>
                 <text
                   x={rootX}
@@ -274,7 +308,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   textAnchor="middle"
                   className="node-subtext"
                 >
-                  {folder}
+                  <title>{mainWt.path}</title>
+                  {truncateLabel(folder, 20)}
                 </text>
               </g>
             );

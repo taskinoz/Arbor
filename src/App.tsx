@@ -111,8 +111,11 @@ function App() {
   const handleDeleteWorktree = async (path: string, force: boolean) => {
     if (!activeRepo) return;
     await invoke('delete_worktree', { repoPath: activeRepo, worktreePath: path, force });
-    // Refresh worktree list
-    await loadWorktrees(activeRepo);
+    // Refresh worktree list. Preserve the current selection reference so the
+    // panel doesn't blink to "nothing selected" mid-refresh (the deleted
+    // worktree naturally won't be found afterwards, so it falls back to the
+    // main worktree once the new list arrives).
+    await loadWorktrees(activeRepo, true);
   };
 
   const handleGraftSubmit = async (
@@ -174,7 +177,7 @@ function App() {
                 <button
                   type="button"
                   className="btn-graft"
-                  style={{ padding: '8px 14px', border: '1px solid rgba(255,255,255,0.08)' }}
+                  style={{ padding: '10px 20px', border: '1px solid rgba(255,255,255,0.08)' }}
                   onClick={() => loadWorktrees(activeRepo)}
                   disabled={isLoadingWorktrees}
                   title="Refresh Git Worktrees"

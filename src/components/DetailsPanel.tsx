@@ -96,22 +96,36 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
     setError(null);
     try {
       await onDeleteWorktree(worktree.path, forceDelete);
-      onClose();
+      // The parent already reassigns the selection to the next sensible
+      // worktree (e.g. root) once its list refreshes, so the panel simply
+      // updates in place rather than closing and needing to be reopened.
+      setShowConfirm(false);
+      setForceDelete(false);
     } catch (err: any) {
       setError(err?.toString() || 'Failed to delete worktree');
+    } finally {
       setDeleting(false);
     }
   };
 
   return (
     <div className={`details-panel panel-${side}`}>
+      {deleting && (
+        <div className="panel-deleting-overlay">
+          <Loader2 size={28} className="loading-spinner" />
+          <span>Removing worktree...</span>
+          <span className="panel-deleting-hint">This can take a moment for large directories</span>
+        </div>
+      )}
+
       <div className="panel-header">
         <span className="panel-title">Worktree Details</span>
-        <button type="button" className="panel-close" onClick={onClose}>
+        <button type="button" className="panel-close" onClick={onClose} disabled={deleting}>
           <X size={16} />
         </button>
       </div>
 
+      <div className="details-panel-scroll">
       <div className="detail-row">
         <span className="detail-label">Branch</span>
         <span className="detail-value" style={{ fontWeight: 600 }}>
@@ -324,6 +338,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             </div>
           )
         )}
+      </div>
       </div>
     </div>
   );
