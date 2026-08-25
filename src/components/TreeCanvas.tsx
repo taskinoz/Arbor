@@ -1,6 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { WorktreeInfo } from '../types';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Plus, Minus, Maximize2 } from 'lucide-react';
+
+const MIN_ZOOM = 0.4;
+const MAX_ZOOM = 3;
+const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1 };
 
 interface TreeCanvasProps {
   worktrees: WorktreeInfo[];
@@ -17,9 +21,127 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 }) => {
   const [hoveredWt, setHoveredWt] = useState<string | null>(null);
 
-  // Dimensions of our SVG coordinate space
+  // Dimensions of the tree's own coordinate space (node layout math below is
+  // all relative to this - unchanged regardless of pan/zoom/padding).
   const width = 650;
   const height = 500;
+
+  // Extra breathing room around the tree itself, so the outermost branches
+  // and their labels aren't crammed against the edge of the canvas.
+  const padX = 180;
+  const padY = 140;
+  const viewBox = `${-padX} ${-padY} ${width + padX * 2} ${height + padY * 2}`;
+
+  // Pan/zoom state, in the tree's own coordinate space. Lets the canvas be
+  // dragged around and scrolled/pinched to zoom, like Google Maps or an
+  // Excalidraw board.
+  const [view, setView] = useState(DEFAULT_VIEW);
+  const [isPanning, setIsPanning] = useState(false);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  // The <svg> only mounts once worktrees have loaded (there's an earlier
+  // loading-state return with no svg at all), so a plain useEffect(fn, [])
+  // attached before that point would find svgRef.current still null and
+  // never get a chance to run again. Tracking the node in state instead lets
+  // the wheel-listener effect below re-run exactly when the svg mounts.
+  const [svgEl, setSvgEl] = useState<SVGSVGElement | null>(null);
+  const setSvgRef = (node: SVGSVGElement | null) => {
+    svgRef.current = node;
+    setSvgEl(node);
+  };
+  const draggingRef = useRef(false);
+  const movedRef = useRef(false);
+  const lastWorldRef = useRef({ x: 0, y: 0 });
+  const suppressClickRef = useRef(false);
+
+  // Converts a point in screen space (clientX/clientY) into the SVG's own
+  // (pre pan/zoom) coordinate space, accounting for however the browser is
+  // currently scaling/letterboxing the viewBox into the element's box.
+  const getWorldPoint = (clientX: number, clientY: number) => {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const transformed = pt.matrixTransform(ctm.inverse());
+    return { x: transformed.x, y: transformed.y };
+  };
+
+  const handlePointerMove = (e: MouseEvent) => {
+    if (!draggingRef.current) return;
+    const world = getWorldPoint(e.clientX, e.clientY);
+    const dx = world.x - lastWorldRef.current.x;
+    const dy = world.y - lastWorldRef.current.y;
+    if (Math.hypot(dx, dy) > 0.5) movedRef.current = true;
+    setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
+    lastWorldRef.current = world;
+  };
+
+  const handlePointerUp = () => {
+    draggingRef.current = false;
+    setIsPanning(false);
+    window.removeEventListener('mousemove', handlePointerMove);
+    window.removeEventListener('mouseup', handlePointerUp);
+    if (movedRef.current) {
+      // A drag just happened - swallow the click that follows so it doesn't
+      // also get treated as a node selection.
+      suppressClickRef.current = true;
+      setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    }
+  };
+
+  const handlePointerDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    draggingRef.current = true;
+    movedRef.current = false;
+    setIsPanning(true);
+    lastWorldRef.current = getWorldPoint(e.clientX, e.clientY);
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('mouseup', handlePointerUp);
+  };
+
+  // Wheel/trackpad zoom, anchored on the cursor so the point under it stays
+  // put - registered natively so we can preventDefault (React's onWheel is
+  // passive by default and can't stop the page from scrolling).
+  useEffect(() => {
+    if (!svgEl) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const world = getWorldPoint(e.clientX, e.clientY);
+      setView((v) => {
+        const factor = Math.exp(-e.deltaY * 0.0015);
+        const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.zoom * factor));
+        const scaleChange = nextZoom / v.zoom;
+        return {
+          zoom: nextZoom,
+          x: world.x - (world.x - v.x) * scaleChange,
+          y: world.y - (world.y - v.y) * scaleChange,
+        };
+      });
+    };
+    svgEl.addEventListener('wheel', handleWheel, { passive: false });
+    return () => svgEl.removeEventListener('wheel', handleWheel);
+  }, [svgEl]);
+
+  const zoomBy = (factor: number) => {
+    setView((v) => {
+      const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.zoom * factor));
+      const scaleChange = nextZoom / v.zoom;
+      // Anchor on the center of the tree's own coordinate space.
+      const cx = width / 2;
+      const cy = height / 2;
+      return {
+        zoom: nextZoom,
+        x: cx - (cx - v.x) * scaleChange,
+        y: cy - (cy - v.y) * scaleChange,
+      };
+    });
+  };
+
+  const resetView = () => setView(DEFAULT_VIEW);
 
   // Separate main worktree and additional worktrees
   const mainWt = worktrees.find((w) => w.is_main) || worktrees[0];
@@ -132,20 +254,26 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         </div>
       ) : (
         <svg
-          viewBox={`0 0 ${width} ${height}`}
-          className={`tree-svg ${isLoading ? 'is-loading' : ''}`}
+          ref={setSvgRef}
+          viewBox={viewBox}
+          className={`tree-svg ${isLoading ? 'is-loading' : ''} ${isPanning ? 'panning' : ''}`}
+          onMouseDown={handlePointerDown}
+          onDoubleClick={resetView}
         >
           {/* Definitions for SVG gradients and filters */}
           <defs>
-            <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <filter id="glow" x="-150%" y="-150%" width="400%" height="400%">
               <feGaussianBlur stdDeviation="4" result="blur" />
               <feComposite in="SourceGraphic" in2="blur" operator="over" />
             </filter>
-            <filter id="heavy-glow" x="-50%" y="-50%" width="200%" height="200%">
+            <filter id="heavy-glow" x="-200%" y="-200%" width="500%" height="500%">
               <feGaussianBlur stdDeviation="6" result="blur" />
               <feComposite in="SourceGraphic" in2="blur" operator="over" />
             </filter>
           </defs>
+
+          {/* Pan/zoom group - everything below moves and scales together */}
+          <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
 
           {/* Main Trunk shadow/glow */}
           <path
@@ -202,7 +330,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
               <g
                 key={`node-${i}`}
                 className={`node-group ${isSelected ? 'selected' : ''}`}
-                onClick={() => onSelectWt(b.wt, isLeft ? 'left' : 'right')}
+                onClick={() => {
+                  if (suppressClickRef.current) return;
+                  onSelectWt(b.wt, isLeft ? 'left' : 'right');
+                }}
                 onMouseEnter={() => setHoveredWt(b.wt.path)}
                 onMouseLeave={() => setHoveredWt(null)}
               >
@@ -258,7 +389,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             return (
               <g
                 className={`node-group ${isSelected ? 'selected' : ''}`}
-                onClick={() => onSelectWt(mainWt, 'right')}
+                onClick={() => {
+                  if (suppressClickRef.current) return;
+                  onSelectWt(mainWt, 'right');
+                }}
                 onMouseEnter={() => setHoveredWt(mainWt.path)}
                 onMouseLeave={() => setHoveredWt(null)}
               >
@@ -314,7 +448,21 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
               </g>
             );
           })()}
+          </g>
         </svg>
+      )}
+      {worktrees.length > 0 && (
+        <div className="canvas-zoom-controls">
+          <button type="button" onClick={() => zoomBy(1.25)} aria-label="Zoom in" title="Zoom in">
+            <Plus size={16} />
+          </button>
+          <button type="button" onClick={() => zoomBy(1 / 1.25)} aria-label="Zoom out" title="Zoom out">
+            <Minus size={16} />
+          </button>
+          <button type="button" onClick={resetView} aria-label="Reset view" title="Reset position & zoom">
+            <Maximize2 size={16} />
+          </button>
+        </div>
       )}
     </div>
   );

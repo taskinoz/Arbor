@@ -293,12 +293,15 @@
   position: relative;
   width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 .tree-svg {
   width: 100%;
   height: 100%;
   display: block;
+  cursor: grab;
+  touch-action: none;
   transition: opacity 0.2s ease, filter 0.2s ease;
 }
 
@@ -306,6 +309,47 @@
   opacity: 0.35;
   filter: blur(1px) saturate(0.6);
   pointer-events: none;
+}
+
+.tree-svg.panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* Google Maps / Excalidraw-style zoom controls, bottom-center of the canvas.
+   Centered (rather than left/right) because the details panel can slide in
+   on either side depending on which side of the tree was clicked. */
+.canvas-zoom-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  z-index: 5;
+  background: var(--bg-sidebar);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 4px;
+  backdrop-filter: blur(6px);
+}
+
+.canvas-zoom-controls button {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.canvas-zoom-controls button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
 }
 
 /* Overlay spinner shown over the existing tree while worktrees are
@@ -400,7 +444,14 @@
 .pulse-ring {
   fill: none;
   stroke-linecap: round;
-  animation: pulse-ring-anim 2s infinite cubic-bezier(0.215, 0.610, 0.355, 1);
+  animation: pulse-ring-anim 0.8s 1 cubic-bezier(0.215, 0.610, 0.355, 1);
+  animation-fill-mode: forwards;
+  /* Anchor the scale animation on the circle's own bounding box rather than
+     the outer <svg>'s viewBox - without this, nesting inside the pan/zoom
+     <g> makes "center" resolve to the whole canvas's origin instead of the
+     node's, so the ring visibly flies off toward the canvas center as it
+     scales instead of pulsing outward from the node. */
+  transform-box: fill-box;
   transform-origin: center;
 }
 
