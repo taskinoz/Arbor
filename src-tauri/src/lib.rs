@@ -15,6 +15,34 @@ struct WorktreeInfo {
     branch: Option<String>,
     is_main: bool,
     is_clean: bool,
+    remote_status: String,
+}
+
+// Classifies a branch's relationship to its remote-tracking ref using
+// `git for-each-ref`'s `%(upstream:track)`, which reports `[gone]` when the
+// upstream ref was deleted (e.g. pruned after the remote branch was
+// removed) - distinct from a branch that never had an upstream configured.
+fn get_remote_status(repo_path: &str, branch: &str) -> String {
+    let refname = format!("refs/heads/{}", branch);
+    let output = run_git_cmd(
+        repo_path,
+        &["for-each-ref", "--format=%(upstream)%00%(upstream:track)", &refname],
+    );
+    match output {
+        Ok(line) => {
+            let mut parts = line.splitn(2, '\u{0}');
+            let upstream = parts.next().unwrap_or("").trim();
+            let track = parts.next().unwrap_or("").trim();
+            if upstream.is_empty() {
+                "no_remote".to_string()
+            } else if track.contains("gone") {
+                "remote_gone".to_string()
+            } else {
+                "has_remote".to_string()
+            }
+        }
+        Err(_) => "no_remote".to_string(),
+    }
 }
 
 fn get_config_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -107,6 +135,9 @@ fn get_worktrees(repo_path: String) -> Result<Vec<WorktreeInfo>, String> {
                 wt.is_clean = run_git_cmd(&wt.path, &["status", "--porcelain"])
                     .map(|out| out.is_empty())
                     .unwrap_or(false);
+                if let Some(ref branch) = wt.branch {
+                    wt.remote_status = get_remote_status(&wt.path, branch);
+                }
                 worktrees.push(wt);
             }
             let path = line["worktree ".len()..].trim().to_string();
@@ -116,6 +147,7 @@ fn get_worktrees(repo_path: String) -> Result<Vec<WorktreeInfo>, String> {
                 branch: None,
                 is_main: false,
                 is_clean: true,
+                remote_status: "no_remote".to_string(),
             });
         } else if line.starts_with("HEAD ") {
             if let Some(ref mut wt) = current_wt {
@@ -137,6 +169,9 @@ fn get_worktrees(repo_path: String) -> Result<Vec<WorktreeInfo>, String> {
         wt.is_clean = run_git_cmd(&wt.path, &["status", "--porcelain"])
             .map(|out| out.is_empty())
             .unwrap_or(false);
+        if let Some(ref branch) = wt.branch {
+            wt.remote_status = get_remote_status(&wt.path, branch);
+        }
         worktrees.push(wt);
     }
 

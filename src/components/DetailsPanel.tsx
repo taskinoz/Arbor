@@ -229,6 +229,33 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         </div>
       </div>
 
+      {worktree.branch && (
+        <div className="detail-row">
+          <span className="detail-label">Remote</span>
+          <div className={`status-badge ${worktree.remote_status.replace('_', '-')}`}>
+            <span
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor:
+                  worktree.remote_status === 'remote_gone'
+                    ? 'var(--accent-red)'
+                    : worktree.remote_status === 'no_remote'
+                    ? 'var(--accent-grey)'
+                    : 'var(--accent-green)',
+                display: 'inline-block',
+              }}
+            />
+            {worktree.remote_status === 'remote_gone'
+              ? 'Remote Branch Deleted'
+              : worktree.remote_status === 'no_remote'
+              ? 'No Remote Branch'
+              : 'Tracking Remote'}
+          </div>
+        </div>
+      )}
+
       <div className="detail-row">
         <span className="detail-label">Directory Path</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

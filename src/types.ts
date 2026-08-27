@@ -1,9 +1,12 @@
+export type RemoteStatus = 'has_remote' | 'no_remote' | 'remote_gone';
+
 export interface WorktreeInfo {
   path: string;
   head: string;
   branch: string | null;
   is_main: boolean;
   is_clean: boolean;
+  remote_status: RemoteStatus;
 }
 
 export interface SyncStatus {

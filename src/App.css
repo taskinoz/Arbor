@@ -16,6 +16,8 @@
   --accent-red-glow: rgba(255, 82, 82, 0.3);
   --accent-blue: #00d2ff;
   --accent-blue-glow: rgba(0, 210, 255, 0.3);
+  --accent-grey: #8a97a3;
+  --accent-grey-glow: rgba(138, 151, 163, 0.3);
   
   font-family: 'Outfit', Inter, system-ui, sans-serif;
   font-size: 14px;
@@ -432,6 +434,16 @@
   stroke: var(--accent-blue);
 }
 
+.node-circle.no-remote {
+  fill: #1a1d21;
+  stroke: var(--accent-grey);
+}
+
+.node-circle.remote-gone {
+  fill: #240808;
+  stroke: var(--accent-red);
+}
+
 .node-group:hover .node-circle {
   r: 12px;
 }
@@ -465,6 +477,14 @@
 
 .pulse-ring.active-main {
   stroke: var(--accent-blue);
+}
+
+.pulse-ring.no-remote {
+  stroke: var(--accent-grey);
+}
+
+.pulse-ring.remote-gone {
+  stroke: var(--accent-red);
 }
 
 .node-text {
@@ -676,6 +696,24 @@
   background: rgba(255, 159, 67, 0.1);
   color: var(--accent-amber);
   border: 1px solid rgba(255, 159, 67, 0.2);
+}
+
+.status-badge.has-remote {
+  background: rgba(0, 255, 135, 0.1);
+  color: var(--accent-green);
+  border: 1px solid rgba(0, 255, 135, 0.2);
+}
+
+.status-badge.no-remote {
+  background: rgba(138, 151, 163, 0.12);
+  color: var(--accent-grey);
+  border: 1px solid rgba(138, 151, 163, 0.25);
+}
+
+.status-badge.remote-gone {
+  background: rgba(255, 82, 82, 0.1);
+  color: var(--accent-red);
+  border: 1px solid rgba(255, 82, 82, 0.2);
 }
 
 .sync-status-line {

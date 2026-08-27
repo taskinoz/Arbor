@@ -156,6 +156,9 @@ export const GraftModal: React.FC<GraftModalProps> = ({
                     value={newBranchName}
                     onChange={(e) => setNewBranchName(e.target.value)}
                     disabled={submitting}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
                   />
                 </div>
 

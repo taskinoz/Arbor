@@ -212,6 +212,15 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     return wt.branch || 'detached';
   };
 
+  // Remote status takes priority over the clean/dirty coloring - a branch
+  // with no remote, or whose remote was deleted, is more important to flag
+  // at a glance than whether it has local changes.
+  const getStatusClass = (wt: WorktreeInfo) => {
+    if (wt.remote_status === 'remote_gone') return 'remote-gone';
+    if (wt.remote_status === 'no_remote') return 'no-remote';
+    return wt.is_clean ? 'clean' : 'dirty';
+  };
+
   const getFolderLabel = (path: string) => {
     const parts = path.split('/');
     return parts[parts.length - 1] || path;
@@ -314,7 +323,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           {/* Render Additional Worktree Nodes */}
           {branches.map((b, i) => {
             const isSelected = selectedWt?.path === b.wt.path;
-            const statusClass = b.wt.is_clean ? 'clean' : 'dirty';
+            const statusClass = getStatusClass(b.wt);
             const label = getBranchLabel(b.wt);
             const folder = getFolderLabel(b.wt.path);
 
