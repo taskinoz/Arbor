@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Plus, Trash2, X, Check, Loader2, FolderOpen } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { toDisplayPath } from '../utils/path';
 
 interface SidebarProps {
   repos: string[];
@@ -10,6 +11,7 @@ interface SidebarProps {
   onRemoveRepo: (path: string) => Promise<void>;
   showFullPath: boolean;
   onToggleFullPath: () => void;
+  homeDir: string | null;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -20,6 +22,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRemoveRepo,
   showFullPath,
   onToggleFullPath,
+  homeDir,
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [newPath, setNewPath] = useState('');
@@ -101,8 +104,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ) : (
           repos.map((repo) => {
             const isActive = repo === activeRepo;
-            const primaryLabel = showFullPath ? repo : getRepoName(repo);
-            const secondaryLabel = showFullPath ? getRepoName(repo) : repo;
+            const displayPath = toDisplayPath(repo, homeDir);
+            const primaryLabel = showFullPath ? displayPath : getRepoName(repo);
+            const secondaryLabel = showFullPath ? getRepoName(repo) : displayPath;
             
             return (
               <div

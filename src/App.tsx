@@ -6,6 +6,7 @@ import { GraftModal } from './components/GraftModal';
 import { WorktreeInfo } from './types';
 import { invoke } from '@tauri-apps/api/core';
 import { GitFork, RefreshCw, Plus, Sparkles } from 'lucide-react';
+import { toDisplayPath } from './utils/path';
 import './App.css';
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
   const [worktrees, setWorktrees] = useState<WorktreeInfo[]>([]);
   const [selectedWt, setSelectedWt] = useState<WorktreeInfo | null>(null);
   const [popupSide, setPopupSide] = useState<'left' | 'right'>('right');
+  const [homeDir, setHomeDir] = useState<string | null>(null);
 
   // Settings states
   const [showFullPath, setShowFullPath] = useState(false);
@@ -38,6 +40,16 @@ function App() {
       }
     };
     fetchRepos();
+
+    const fetchHomeDir = async () => {
+      try {
+        const home: string | null = await invoke('get_home_dir');
+        setHomeDir(home);
+      } catch (err) {
+        console.error('Failed to load home directory:', err);
+      }
+    };
+    fetchHomeDir();
   }, []);
 
   // Fetch worktrees whenever the active repository changes
@@ -47,16 +59,31 @@ function App() {
       setSelectedWt(null);
       return;
     }
+    // Clear the tree immediately rather than leaving the previous repo's
+    // (now stale) tree dimmed underneath a spinner - the canvas goes blank
+    // with a loading throbber, then the new tree grows in once it arrives.
+    setWorktrees([]);
+    setSelectedWt(null);
     loadWorktrees(activeRepo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRepo]);
 
-  const loadWorktrees = async (repoPath: string, preserveSelection = false) => {
+  const loadWorktrees = async (repoPath: string, preserveSelection = false, selectBranch?: string) => {
     setIsLoadingWorktrees(true);
     const previousSelectedPath = preserveSelection ? selectedWt?.path : null;
     if (!preserveSelection) setSelectedWt(null);
     try {
       const list: WorktreeInfo[] = await invoke('get_worktrees', { repoPath });
       setWorktrees(list);
+      // Just grafted a branch - select the worktree for it regardless of
+      // whatever was selected before, so the new branch is front-and-center.
+      if (selectBranch) {
+        const grafted = list.find((w) => w.branch === selectBranch);
+        if (grafted) {
+          setSelectedWt(grafted);
+          return;
+        }
+      }
       // If we're refreshing in place (e.g. after a fetch/pull), keep the same
       // worktree selected/open rather than jumping the popover to the root.
       const stillSelected = previousSelectedPath
@@ -132,8 +159,8 @@ function App() {
       newBranch,
       baseBranch,
     });
-    // Refresh worktree list
-    await loadWorktrees(activeRepo);
+    // Refresh worktree list and select the branch we just grafted
+    await loadWorktrees(activeRepo, false, branch);
   };
 
   const handleSelectWt = (wt: WorktreeInfo, side: 'left' | 'right') => {
@@ -159,6 +186,7 @@ function App() {
         onRemoveRepo={handleRemoveRepo}
         showFullPath={showFullPath}
         onToggleFullPath={() => setShowFullPath(!showFullPath)}
+        homeDir={homeDir}
       />
 
       {/* Main Dashboard Section */}
@@ -170,7 +198,7 @@ function App() {
               <div className="repo-title-info">
                 <span className="repo-active-name">{getRepoName(activeRepo)}</span>
                 <span className="repo-active-path" title={activeRepo}>
-                  {activeRepo}
+                  {toDisplayPath(activeRepo, homeDir)}
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '4px' }}>
@@ -194,6 +222,7 @@ function App() {
               selectedWt={selectedWt}
               onSelectWt={handleSelectWt}
               isLoading={isLoadingWorktrees}
+              homeDir={homeDir}
             />
 
             {/* Floating button to Graft new branches */}
@@ -214,7 +243,9 @@ function App() {
             {selectedWt && (
               <DetailsPanel
                 worktree={selectedWt}
+                repoPath={activeRepo}
                 side={popupSide}
+                homeDir={homeDir}
                 onClose={() => setSelectedWt(null)}
                 onOpenInCode={handleOpenInCode}
                 onDeleteWorktree={handleDeleteWorktree}
@@ -226,6 +257,7 @@ function App() {
             {showGraftModal && (
               <GraftModal
                 repoPath={activeRepo}
+                homeDir={homeDir}
                 onClose={() => setShowGraftModal(false)}
                 onSubmit={handleGraftSubmit}
               />

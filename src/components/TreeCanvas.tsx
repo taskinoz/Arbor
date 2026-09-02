@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { WorktreeInfo } from '../types';
-import { RefreshCw, Plus, Minus, Maximize2 } from 'lucide-react';
+import { RefreshCw, Plus, Minus, Maximize2, Search, X } from 'lucide-react';
+import { toDisplayPath } from '../utils/path';
 
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 3;
@@ -11,6 +12,7 @@ interface TreeCanvasProps {
   selectedWt: WorktreeInfo | null;
   onSelectWt: (wt: WorktreeInfo, side: 'left' | 'right') => void;
   isLoading: boolean;
+  homeDir: string | null;
 }
 
 export const TreeCanvas: React.FC<TreeCanvasProps> = ({
@@ -18,6 +20,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   selectedWt,
   onSelectWt,
   isLoading,
+  homeDir,
 }) => {
   const [hoveredWt, setHoveredWt] = useState<string | null>(null);
 
@@ -143,9 +146,32 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
   const resetView = () => setView(DEFAULT_VIEW);
 
+  // Search filters which branches show up as leaves on the tree - the root
+  // stays visible either way, as the tree's anchor.
+  const [searchQuery, setSearchQuery] = useState('');
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const matchesQuery = (wt: WorktreeInfo) => {
+    if (!trimmedQuery) return true;
+    const branch = (wt.branch || 'detached').toLowerCase();
+    const folder = wt.path.split('/').pop()?.toLowerCase() || '';
+    return branch.includes(trimmedQuery) || folder.includes(trimmedQuery);
+  };
+
+  // Replays the "grow" animation whenever a fresh tree appears after being
+  // empty (e.g. switching repos) - not on every minor refresh, since the <g>
+  // below is only remounted (via its key) on that empty -> populated edge.
+  const hadWorktreesRef = useRef(false);
+  const [treeKey, setTreeKey] = useState(0);
+  useEffect(() => {
+    if (!hadWorktreesRef.current && worktrees.length > 0) {
+      setTreeKey((k) => k + 1);
+    }
+    hadWorktreesRef.current = worktrees.length > 0;
+  }, [worktrees.length]);
+
   // Separate main worktree and additional worktrees
   const mainWt = worktrees.find((w) => w.is_main) || worktrees[0];
-  const additionalWts = worktrees.filter((w) => w !== mainWt);
+  const additionalWts = worktrees.filter((w) => w !== mainWt && matchesQuery(w));
 
   // Define position of the main root worktree node (at the base of the trunk)
   const rootX = width / 2;
@@ -284,6 +310,11 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           {/* Pan/zoom group - everything below moves and scales together */}
           <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
 
+          {/* Remounted (via key) only when a fresh tree appears after being
+              empty, so the trunk/branches/nodes draw themselves in once per
+              repo load instead of replaying on every minor refresh. */}
+          <g key={treeKey} className="tree-grow">
+
           {/* Main Trunk shadow/glow */}
           <path
             d={`M ${rootX} ${rootY + 40} L ${rootX} ${trunkEndY - 20}`}
@@ -293,15 +324,17 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           {/* Main Trunk */}
           <path
             d={`M ${rootX} ${rootY + 40} L ${rootX} ${trunkEndY - 20}`}
-            className={`tree-branch ${selectedWt?.is_main ? 'active' : ''}`}
+            className={`tree-branch tree-grow-draw ${selectedWt?.is_main ? 'active' : ''}`}
             strokeWidth={6}
+            pathLength={1}
+            style={{ animationDelay: '0ms' }}
           />
 
           {/* Render Additional Worktree Branches */}
           {branches.map((b, i) => {
             const isSelected = selectedWt?.path === b.wt.path;
             const isHovered = hoveredWt === b.wt.path;
-            
+
             return (
               <g key={`branch-${i}`}>
                 {/* Glow layer */}
@@ -313,8 +346,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                 {/* Branch line */}
                 <path
                   d={b.pathD}
-                  className={`tree-branch ${isSelected ? 'active' : ''} ${isHovered ? 'hovered' : ''}`}
+                  className={`tree-branch tree-grow-draw ${isSelected ? 'active' : ''} ${isHovered ? 'hovered' : ''}`}
                   strokeWidth={3}
+                  pathLength={1}
+                  style={{ animationDelay: `${400 + i * 70}ms` }}
                 />
               </g>
             );
@@ -338,7 +373,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             return (
               <g
                 key={`node-${i}`}
-                className={`node-group ${isSelected ? 'selected' : ''}`}
+                className={`node-group tree-grow-pop ${isSelected ? 'selected' : ''}`}
+                style={{ animationDelay: `${680 + i * 70}ms` }}
                 onClick={() => {
                   if (suppressClickRef.current) return;
                   onSelectWt(b.wt, isLeft ? 'left' : 'right');
@@ -366,15 +402,17 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   filter={isSelected || hoveredWt === b.wt.path ? 'url(#glow)' : undefined}
                 />
                 
-                {/* Labels (truncated with a native tooltip for the full name) */}
+                {/* Labels (truncated with a native tooltip for the full name).
+                    Folder name is primary and branch name secondary - it's
+                    what you'd actually navigate to on disk. */}
                 <text
                   x={b.leafX + textOffsetX}
                   y={b.leafY - 2}
                   textAnchor={textAnchor}
                   className="node-text"
                 >
-                  <title>{label}</title>
-                  {truncateLabel(label)}
+                  <title>{toDisplayPath(b.wt.path, homeDir)}</title>
+                  {truncateLabel(folder)}
                 </text>
                 <text
                   x={b.leafX + textOffsetX}
@@ -382,8 +420,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   textAnchor={textAnchor}
                   className="node-subtext"
                 >
-                  <title>{b.wt.path}</title>
-                  {truncateLabel(folder)}
+                  <title>{label}</title>
+                  {truncateLabel(label)}
                 </text>
               </g>
             );
@@ -397,7 +435,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
             return (
               <g
-                className={`node-group ${isSelected ? 'selected' : ''}`}
+                className={`node-group tree-grow-pop ${isSelected ? 'selected' : ''}`}
+                style={{ animationDelay: '300ms' }}
                 onClick={() => {
                   if (suppressClickRef.current) return;
                   onSelectWt(mainWt, 'right');
@@ -434,7 +473,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   filter={isSelected || hoveredWt === mainWt.path ? 'url(#heavy-glow)' : undefined}
                 />
                 
-                {/* Root label below node */}
+                {/* Root label below node - folder name primary (Root), branch secondary */}
                 <text
                   x={rootX}
                   y={rootY + 28}
@@ -442,8 +481,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   className="node-text"
                   style={{ fontWeight: 'bold' }}
                 >
-                  <title>{label}</title>
-                  {truncateLabel(label, 20)} (Root)
+                  <title>{toDisplayPath(mainWt.path, homeDir)}</title>
+                  {truncateLabel(folder, 20)} (Root)
                 </text>
                 <text
                   x={rootX}
@@ -451,14 +490,44 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   textAnchor="middle"
                   className="node-subtext"
                 >
-                  <title>{mainWt.path}</title>
-                  {truncateLabel(folder, 20)}
+                  <title>{label}</title>
+                  {truncateLabel(label, 20)}
                 </text>
               </g>
             );
           })()}
           </g>
+          </g>
         </svg>
+      )}
+      {worktrees.length > 1 && (
+        <div className="canvas-search">
+          <Search size={14} className="canvas-search-icon" />
+          <input
+            type="text"
+            className="canvas-search-input"
+            placeholder="Search branches..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              className="canvas-search-clear"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+              title="Clear search"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      )}
+      {worktrees.length > 0 && trimmedQuery && additionalWts.length === 0 && (
+        <div className="canvas-search-empty">No branches match "{searchQuery.trim()}"</div>
       )}
       {worktrees.length > 0 && (
         <div className="canvas-zoom-controls">

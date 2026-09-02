@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { WorktreeInfo, SyncStatus } from '../types';
+import { toDisplayPath } from '../utils/path';
 import {
   X,
   Code,
@@ -12,13 +14,16 @@ import {
   ArrowDown,
   ArrowUp,
   Loader2,
+  GitPullRequest,
 } from 'lucide-react';
 
 type SyncAction = 'fetch' | 'pull' | 'push' | null;
 
 interface DetailsPanelProps {
   worktree: WorktreeInfo;
+  repoPath: string;
   side: 'left' | 'right';
+  homeDir: string | null;
   onClose: () => void;
   onOpenInCode: (path: string) => Promise<void>;
   onDeleteWorktree: (path: string, force: boolean) => Promise<void>;
@@ -27,7 +32,9 @@ interface DetailsPanelProps {
 
 export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   worktree,
+  repoPath,
   side,
+  homeDir,
   onClose,
   onOpenInCode,
   onDeleteWorktree,
@@ -37,7 +44,13 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [forceDelete, setForceDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [branchCopied, setBranchCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Pull request lookup (via `gh`), scoped to this worktree's branch - finds
+  // a PR even if it's since been closed/merged and its branch deleted.
+  const [prUrl, setPrUrl] = useState<string | null>(null);
+  const [prLoading, setPrLoading] = useState(false);
 
   // Remote sync state (fetch / pull / push), scoped to this specific worktree
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
@@ -66,6 +79,30 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worktree.path]);
 
+  useEffect(() => {
+    const branch = worktree.branch;
+    if (!branch) {
+      setPrUrl(null);
+      return;
+    }
+    let cancelled = false;
+    setPrLoading(true);
+    setPrUrl(null);
+    invoke<string | null>('get_pr_url', { repoPath, branch })
+      .then((url) => {
+        if (!cancelled) setPrUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setPrUrl(null);
+      })
+      .finally(() => {
+        if (!cancelled) setPrLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repoPath, worktree.branch]);
+
   const runSyncAction = async (action: Exclude<SyncAction, null>) => {
     if (runningAction) return; // A sync command is already running against this worktree
     setRunningAction(action);
@@ -89,6 +126,13 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
     navigator.clipboard.writeText(worktree.path);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyBranch = () => {
+    if (!worktree.branch) return;
+    navigator.clipboard.writeText(worktree.branch);
+    setBranchCopied(true);
+    setTimeout(() => setBranchCopied(false), 2000);
   };
 
   const handleDelete = async () => {
@@ -128,9 +172,36 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
       <div className="details-panel-scroll">
       <div className="detail-row">
         <span className="detail-label">Branch</span>
-        <span className="detail-value" style={{ fontWeight: 600 }}>
-          {worktree.branch || 'Detached HEAD'}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span className="detail-value mono" style={{ flex: 1, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {worktree.branch || 'Detached HEAD'}
+          </span>
+          {worktree.branch && (
+            <button
+              type="button"
+              className="panel-close"
+              style={{ padding: '6px' }}
+              title="Copy branch name"
+              onClick={handleCopyBranch}
+            >
+              {branchCopied ? <Check size={14} style={{ color: 'var(--accent-green)' }} /> : <Copy size={14} />}
+            </button>
+          )}
+          {prLoading && (
+            <Loader2 size={13} className="loading-spinner" style={{ color: 'var(--text-muted)' }} />
+          )}
+          {!prLoading && prUrl && (
+            <button
+              type="button"
+              className="panel-close"
+              style={{ padding: '6px' }}
+              title="View pull request"
+              onClick={() => openUrl(prUrl)}
+            >
+              <GitPullRequest size={14} />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="detail-row">
@@ -259,8 +330,8 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
       <div className="detail-row">
         <span className="detail-label">Directory Path</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span className="detail-value mono" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {worktree.path}
+          <span className="detail-value mono" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={worktree.path}>
+            {toDisplayPath(worktree.path, homeDir)}
           </span>
           <button
             type="button"

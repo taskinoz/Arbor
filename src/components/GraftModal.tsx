@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { X, Loader2, GitBranch } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { toDisplayPath } from '../utils/path';
 
 interface GraftModalProps {
   repoPath: string;
+  homeDir: string | null;
   onClose: () => void;
   onSubmit: (path: string, branch: string, newBranch: boolean, baseBranch?: string) => Promise<void>;
 }
 
 export const GraftModal: React.FC<GraftModalProps> = ({
   repoPath,
+  homeDir,
   onClose,
   onSubmit,
 }) => {
@@ -26,7 +29,10 @@ export const GraftModal: React.FC<GraftModalProps> = ({
   const [existingBranch, setExistingBranch] = useState('');
 
   // Find parent folder of the repo to show in the helper text
-  const parentFolder = repoPath.substring(0, repoPath.lastIndexOf('/')) || 'parent folder';
+  const parentFolder = toDisplayPath(
+    repoPath.substring(0, repoPath.lastIndexOf('/')) || 'parent folder',
+    homeDir
+  );
 
   useEffect(() => {
     const fetchBranches = async () => {
