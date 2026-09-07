@@ -195,20 +195,23 @@ async fn remove_repo(app_handle: tauri::AppHandle, path: String) -> Result<Vec<S
     .await
 }
 
+// How many worktrees to enrich (git status + live remote check) at once.
+// Each one may open its own network connection (the `ls-remote` inside
+// `get_remote_status`), so this is capped rather than left fully unbounded
+// to avoid hammering the remote with dozens of simultaneous connections on
+// repos with a lot of worktrees.
+const ENRICH_CONCURRENCY: usize = 12;
+
 fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String> {
     let output = run_git_cmd(&repo_path, &["worktree", "list", "--porcelain"])?;
     let mut worktrees = Vec::new();
     let mut current_wt: Option<WorktreeInfo> = None;
 
+    // First pass: just parse `worktree list --porcelain` - fast, local, no
+    // subprocesses beyond the one call above.
     for line in output.lines() {
         if line.starts_with("worktree ") {
-            if let Some(mut wt) = current_wt.take() {
-                wt.is_clean = run_git_cmd(&wt.path, &["status", "--porcelain"])
-                    .map(|out| out.is_empty())
-                    .unwrap_or(false);
-                if let Some(ref branch) = wt.branch {
-                    wt.remote_status = get_remote_status(&wt.path, branch);
-                }
+            if let Some(wt) = current_wt.take() {
                 worktrees.push(wt);
             }
             let path = line["worktree ".len()..].trim().to_string();
@@ -236,18 +239,33 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
             }
         }
     }
-    if let Some(mut wt) = current_wt {
-        wt.is_clean = run_git_cmd(&wt.path, &["status", "--porcelain"])
-            .map(|out| out.is_empty())
-            .unwrap_or(false);
-        if let Some(ref branch) = wt.branch {
-            wt.remote_status = get_remote_status(&wt.path, branch);
-        }
+    if let Some(wt) = current_wt {
         worktrees.push(wt);
     }
 
     if !worktrees.is_empty() {
         worktrees[0].is_main = true;
+    }
+
+    // Second pass: enrich each worktree with its clean/dirty status and a
+    // live remote check, in parallel (bounded in batches) rather than one
+    // at a time - `get_remote_status` does a network round trip per tracked
+    // branch, so doing this sequentially for N worktrees took N round trips
+    // back to back, which is what made loading take up to a minute or two
+    // on repos with a lot of worktrees.
+    for chunk in worktrees.chunks_mut(ENRICH_CONCURRENCY) {
+        std::thread::scope(|scope| {
+            for wt in chunk.iter_mut() {
+                scope.spawn(move || {
+                    wt.is_clean = run_git_cmd(&wt.path, &["status", "--porcelain"])
+                        .map(|out| out.is_empty())
+                        .unwrap_or(false);
+                    if let Some(branch) = wt.branch.clone() {
+                        wt.remote_status = get_remote_status(&wt.path, &branch);
+                    }
+                });
+            }
+        });
     }
 
     Ok(worktrees)
