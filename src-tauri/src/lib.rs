@@ -247,6 +247,13 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
         worktrees[0].is_main = true;
     }
 
+    // Merged-PR lookup is one network call for the whole repo, so run it
+    // alongside the per-worktree enrichment rather than after it.
+    let merged_lookup = {
+        let repo_path = repo_path.clone();
+        std::thread::spawn(move || merged_pr_branches(&repo_path))
+    };
+
     // Second pass: enrich each worktree with its clean/dirty status and a
     // live remote check, in parallel (bounded in batches) rather than one
     // at a time - `get_remote_status` does a network round trip per tracked
@@ -268,7 +275,36 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
         });
     }
 
+    let merged = merged_lookup.join().unwrap_or_default();
+    for wt in worktrees.iter_mut() {
+        if wt.remote_status == "has_remote" && wt.branch.as_ref().is_some_and(|b| merged.contains(b)) {
+            wt.remote_status = "merged".to_string();
+        }
+    }
+
     Ok(worktrees)
+}
+
+// Head branch names of merged GitHub PRs, via `gh`. Used to flag branches
+// that were merged but whose remote branch was never deleted. Checking PRs
+// rather than `git branch --merged` also catches squash/rebase merges. Any
+// failure (gh missing, not GitHub, offline) just means nothing is flagged.
+// ponytail: only the latest 500 merged PRs are checked; page if a repo outgrows that.
+fn merged_pr_branches(repo_path: &str) -> std::collections::HashSet<String> {
+    std::process::Command::new("gh")
+        .args(["pr", "list", "--state", "merged", "--json", "headRefName", "--limit", "500"])
+        .current_dir(repo_path)
+        .env("PATH", augmented_path())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout).ok())
+        .map(|prs| {
+            prs.iter()
+                .filter_map(|pr| pr.get("headRefName")?.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[tauri::command]

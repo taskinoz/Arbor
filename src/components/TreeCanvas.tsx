@@ -146,11 +146,23 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
   const resetView = () => setView(DEFAULT_VIEW);
 
+  // Remote status takes priority over the clean/dirty coloring - a branch
+  // with no remote, or whose remote was deleted, is more important to flag
+  // at a glance than whether it has local changes.
+  const getStatusClass = (wt: WorktreeInfo) => {
+    if (wt.remote_status === 'remote_gone') return 'remote-gone';
+    if (wt.remote_status === 'merged') return 'merged';
+    if (wt.remote_status === 'no_remote') return 'no-remote';
+    return wt.is_clean ? 'clean' : 'dirty';
+  };
+
   // Search filters which branches show up as leaves on the tree - the root
   // stays visible either way, as the tree's anchor.
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
   const trimmedQuery = searchQuery.trim().toLowerCase();
   const matchesQuery = (wt: WorktreeInfo) => {
+    if (statusFilter !== 'all' && getStatusClass(wt) !== statusFilter) return false;
     if (!trimmedQuery) return true;
     const branch = (wt.branch || 'detached').toLowerCase();
     const folder = wt.path.split('/').pop()?.toLowerCase() || '';
@@ -236,15 +248,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
   const getBranchLabel = (wt: WorktreeInfo) => {
     return wt.branch || 'detached';
-  };
-
-  // Remote status takes priority over the clean/dirty coloring - a branch
-  // with no remote, or whose remote was deleted, is more important to flag
-  // at a glance than whether it has local changes.
-  const getStatusClass = (wt: WorktreeInfo) => {
-    if (wt.remote_status === 'remote_gone') return 'remote-gone';
-    if (wt.remote_status === 'no_remote') return 'no-remote';
-    return wt.is_clean ? 'clean' : 'dirty';
   };
 
   const getFolderLabel = (path: string) => {
@@ -524,10 +527,24 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
               <X size={14} />
             </button>
           )}
+          <select
+            className="canvas-status-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            aria-label="Filter by status"
+            title="Filter by status"
+          >
+            <option value="all">All</option>
+            <option value="clean">Clean</option>
+            <option value="dirty">Dirty</option>
+            <option value="no-remote">Untracked</option>
+            <option value="merged">Merged</option>
+            <option value="remote-gone">Deleted</option>
+          </select>
         </div>
       )}
-      {worktrees.length > 0 && trimmedQuery && additionalWts.length === 0 && (
-        <div className="canvas-search-empty">No branches match "{searchQuery.trim()}"</div>
+      {worktrees.length > 0 && (trimmedQuery || statusFilter !== 'all') && additionalWts.length === 0 && (
+        <div className="canvas-search-empty">No branches match the current filter</div>
       )}
       {worktrees.length > 0 && (
         <div className="canvas-zoom-controls">

@@ -312,6 +312,8 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 backgroundColor:
                   worktree.remote_status === 'remote_gone'
                     ? 'var(--accent-red)'
+                    : worktree.remote_status === 'merged'
+                    ? 'var(--accent-purple)'
                     : worktree.remote_status === 'no_remote'
                     ? 'var(--accent-grey)'
                     : 'var(--accent-green)',
@@ -320,6 +322,8 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             />
             {worktree.remote_status === 'remote_gone'
               ? 'Remote Branch Deleted'
+              : worktree.remote_status === 'merged'
+              ? 'Merged, Remote Not Deleted'
               : worktree.remote_status === 'no_remote'
               ? 'No Remote Branch'
               : 'Tracking Remote'}

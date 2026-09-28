@@ -18,6 +18,7 @@
   --accent-blue-glow: rgba(0, 210, 255, 0.3);
   --accent-grey: #8a97a3;
   --accent-grey-glow: rgba(138, 151, 163, 0.3);
+  --accent-purple: #b388ff;
   
   font-family: 'Outfit', Inter, system-ui, sans-serif;
   font-size: 14px;
@@ -334,7 +335,24 @@
   border-radius: 8px;
   padding: 6px 10px;
   backdrop-filter: blur(6px);
-  width: 220px;
+  width: 320px;
+}
+
+.canvas-status-filter {
+  background: transparent;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  padding-left: 8px;
+  outline: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.canvas-status-filter option {
+  background: var(--bg-dark);
+  color: var(--text-main);
 }
 
 .canvas-search-icon {
@@ -526,6 +544,11 @@
   stroke: var(--accent-red);
 }
 
+.node-circle.merged {
+  fill: #170d26;
+  stroke: var(--accent-purple);
+}
+
 .node-group:hover .node-circle {
   r: 12px;
 }
@@ -567,6 +590,10 @@
 
 .pulse-ring.remote-gone {
   stroke: var(--accent-red);
+}
+
+.pulse-ring.merged {
+  stroke: var(--accent-purple);
 }
 
 .node-text {
@@ -795,6 +822,12 @@
   background: rgba(255, 82, 82, 0.1);
   color: var(--accent-red);
   border: 1px solid rgba(255, 82, 82, 0.2);
+}
+
+.status-badge.merged {
+  background: rgba(179, 136, 255, 0.1);
+  color: var(--accent-purple);
+  border: 1px solid rgba(179, 136, 255, 0.2);
 }
 
 .sync-status-line {

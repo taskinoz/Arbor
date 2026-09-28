@@ -1,4 +1,4 @@
-export type RemoteStatus = 'has_remote' | 'no_remote' | 'remote_gone';
+export type RemoteStatus = 'has_remote' | 'no_remote' | 'remote_gone' | 'merged';
 
 export interface WorktreeInfo {
   path: string;
