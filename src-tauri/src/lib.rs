@@ -513,6 +513,41 @@ async fn get_pr_url(repo_path: String, branch: String) -> Result<Option<String>,
     .await
 }
 
+// Opens a folder in the OS file manager (Finder / Explorer / xdg-open).
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
+}
+
+// Swaps the running app's icon for the themed one the frontend renders.
+// macOS: the dock icon (must be set on the main thread). Elsewhere: the
+// window/taskbar icon. Neither touches the bundled icon on disk.
+#[tauri::command]
+fn set_app_icon(app: tauri::AppHandle, png: Vec<u8>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        app.run_on_main_thread(move || {
+            use objc2::{AllocAnyThread, MainThreadMarker};
+            use objc2_app_kit::{NSApplication, NSImage};
+            use objc2_foundation::NSData;
+            let Some(mtm) = MainThreadMarker::new() else { return };
+            let data = NSData::with_bytes(&png);
+            if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+                unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)) };
+            }
+        })
+        .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let image = tauri::image::Image::from_bytes(&png).map_err(|e| e.to_string())?;
+        for window in app.webview_windows().values() {
+            window.set_icon(image.clone()).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -532,7 +567,9 @@ pub fn run() {
             git_pull,
             git_push,
             get_home_dir,
-            get_pr_url
+            get_pr_url,
+            set_app_icon,
+            open_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

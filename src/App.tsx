@@ -7,6 +7,9 @@ import { WorktreeInfo } from './types';
 import { invoke } from '@tauri-apps/api/core';
 import { GitFork, RefreshCw, Plus, Sparkles } from 'lucide-react';
 import { toDisplayPath } from './utils/path';
+import { ThemeName, applyTheme, currentSeason } from './theme';
+import { Settings, loadSettings, saveSettings } from './settings';
+import { SettingsModal } from './components/SettingsModal';
 import './App.css';
 
 function App() {
@@ -18,7 +21,27 @@ function App() {
   const [homeDir, setHomeDir] = useState<string | null>(null);
 
   // Settings states
-  const [showFullPath, setShowFullPath] = useState(false);
+  const [settings, setSettings] = useState(loadSettings);
+  const [showSettings, setShowSettings] = useState(false);
+  const [season, setSeason] = useState(currentSeason);
+  const activeTheme: ThemeName = settings.autoTheme ? season : settings.theme;
+  const updateSettings = (patch: Partial<Settings>) => setSettings((s) => ({ ...s, ...patch }));
+
+  useEffect(() => {
+    saveSettings(settings);
+  }, [settings]);
+
+  useEffect(() => {
+    applyTheme(activeTheme);
+  }, [activeTheme]);
+
+  // Auto mode re-checks the season hourly so a long-running session still
+  // rolls over when the month does.
+  useEffect(() => {
+    if (!settings.autoTheme) return;
+    const id = setInterval(() => setSeason(currentSeason()), 60 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [settings.autoTheme]);
 
   // Loading states
   const [isLoadingWorktrees, setIsLoadingWorktrees] = useState(false);
@@ -165,9 +188,14 @@ function App() {
 
   const handleSelectWt = (wt: WorktreeInfo, side: 'left' | 'right') => {
     setSelectedWt(wt);
-    // Open the popover on the opposite side of the screen from the clicked node
-    // so it never covers the node (or its neighbors) that was just selected.
-    setPopupSide(side === 'right' ? 'left' : 'right');
+    // Dynamic opens the popover on the opposite side of the screen from the
+    // clicked node so it never covers the node (or its neighbors) that was
+    // just selected; otherwise it's pinned to the side chosen in settings.
+    if (settings.detailsSide === 'dynamic') {
+      setPopupSide(side === 'right' ? 'left' : 'right');
+    } else {
+      setPopupSide(settings.detailsSide);
+    }
   };
 
   const getRepoName = (path: string) => {
@@ -184,8 +212,7 @@ function App() {
         onSelectRepo={handleSelectRepo}
         onAddRepo={handleAddRepo}
         onRemoveRepo={handleRemoveRepo}
-        showFullPath={showFullPath}
-        onToggleFullPath={() => setShowFullPath(!showFullPath)}
+        onOpenSettings={() => setShowSettings(true)}
         homeDir={homeDir}
       />
 
@@ -223,6 +250,7 @@ function App() {
               onSelectWt={handleSelectWt}
               isLoading={isLoadingWorktrees}
               homeDir={homeDir}
+              treeLabel={settings.treeLabel}
             />
 
             {/* Floating button to Graft new branches */}
@@ -279,6 +307,15 @@ function App() {
           </div>
         )}
       </main>
+
+      {showSettings && (
+        <SettingsModal
+          settings={settings}
+          activeTheme={activeTheme}
+          onChange={updateSettings}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
 }

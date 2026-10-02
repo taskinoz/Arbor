@@ -13,6 +13,7 @@ interface TreeCanvasProps {
   onSelectWt: (wt: WorktreeInfo, side: 'left' | 'right') => void;
   isLoading: boolean;
   homeDir: string | null;
+  treeLabel: 'worktree' | 'branch';
 }
 
 export const TreeCanvas: React.FC<TreeCanvasProps> = ({
@@ -21,6 +22,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   onSelectWt,
   isLoading,
   homeDir,
+  treeLabel,
 }) => {
   const [hoveredWt, setHoveredWt] = useState<string | null>(null);
 
@@ -406,16 +408,16 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                 />
                 
                 {/* Labels (truncated with a native tooltip for the full name).
-                    Folder name is primary and branch name secondary - it's
-                    what you'd actually navigate to on disk. */}
+                    Settings pick whether the worktree folder or the branch
+                    is the primary label; the other sits underneath. */}
                 <text
                   x={b.leafX + textOffsetX}
                   y={b.leafY - 2}
                   textAnchor={textAnchor}
                   className="node-text"
                 >
-                  <title>{toDisplayPath(b.wt.path, homeDir)}</title>
-                  {truncateLabel(folder)}
+                  <title>{treeLabel === 'branch' ? label : toDisplayPath(b.wt.path, homeDir)}</title>
+                  {truncateLabel(treeLabel === 'branch' ? label : folder)}
                 </text>
                 <text
                   x={b.leafX + textOffsetX}
@@ -423,8 +425,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   textAnchor={textAnchor}
                   className="node-subtext"
                 >
-                  <title>{label}</title>
-                  {truncateLabel(label)}
+                  <title>{treeLabel === 'branch' ? toDisplayPath(b.wt.path, homeDir) : label}</title>
+                  {truncateLabel(treeLabel === 'branch' ? folder : label)}
                 </text>
               </g>
             );
@@ -476,7 +478,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   filter={isSelected || hoveredWt === mainWt.path ? 'url(#heavy-glow)' : undefined}
                 />
                 
-                {/* Root label below node - folder name primary (Root), branch secondary */}
+                {/* Root label below node - primary name (Root), other secondary */}
                 <text
                   x={rootX}
                   y={rootY + 28}
@@ -484,8 +486,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   className="node-text"
                   style={{ fontWeight: 'bold' }}
                 >
-                  <title>{toDisplayPath(mainWt.path, homeDir)}</title>
-                  {truncateLabel(folder, 20)} (Root)
+                  <title>{treeLabel === 'branch' ? label : toDisplayPath(mainWt.path, homeDir)}</title>
+                  {truncateLabel(treeLabel === 'branch' ? label : folder, 20)} (Root)
                 </text>
                 <text
                   x={rootX}
@@ -493,8 +495,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   textAnchor="middle"
                   className="node-subtext"
                 >
-                  <title>{label}</title>
-                  {truncateLabel(label, 20)}
+                  <title>{treeLabel === 'branch' ? toDisplayPath(mainWt.path, homeDir) : label}</title>
+                  {truncateLabel(treeLabel === 'branch' ? folder : label, 20)}
                 </text>
               </g>
             );

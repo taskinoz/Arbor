@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Plus, Trash2, X, Check, Loader2, FolderOpen } from 'lucide-react';
+import { Plus, Trash2, X, Check, Loader2, FolderOpen, Settings } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { toDisplayPath } from '../utils/path';
 
@@ -9,9 +10,8 @@ interface SidebarProps {
   onSelectRepo: (repo: string) => void;
   onAddRepo: (path: string) => Promise<void>;
   onRemoveRepo: (path: string) => Promise<void>;
-  showFullPath: boolean;
-  onToggleFullPath: () => void;
   homeDir: string | null;
+  onOpenSettings: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -20,9 +20,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectRepo,
   onAddRepo,
   onRemoveRepo,
-  showFullPath,
-  onToggleFullPath,
   homeDir,
+  onOpenSettings,
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [newPath, setNewPath] = useState('');
@@ -71,30 +70,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="sidebar-header">
         <img src="/logo.png" alt="Arbor" className="logo-icon" style={{ width: 28, height: 28, objectFit: 'contain' }} />
         <span className="logo-text">Arbor</span>
+        <button
+          type="button"
+          className="btn-settings"
+          onClick={onOpenSettings}
+          aria-label="Settings"
+          title="Settings"
+        >
+          <Settings size={18} />
+        </button>
       </div>
 
       <div className="repo-section">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', paddingRight: '8px' }}>
           <h3 className="section-title" style={{ margin: 0 }}>Repositories</h3>
-          {repos.length > 0 && (
-            <button
-              type="button"
-              onClick={onToggleFullPath}
-              style={{
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                color: 'var(--text-muted)',
-                fontSize: '0.7rem',
-                cursor: 'pointer',
-                padding: '2px 8px',
-                borderRadius: '4px',
-                boxShadow: 'none',
-              }}
-              title="Toggle path / folder display"
-            >
-              {showFullPath ? 'Show Folder' : 'Show Path'}
-            </button>
-          )}
         </div>
         
         {repos.length === 0 ? (
@@ -105,8 +94,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           repos.map((repo) => {
             const isActive = repo === activeRepo;
             const displayPath = toDisplayPath(repo, homeDir);
-            const primaryLabel = showFullPath ? displayPath : getRepoName(repo);
-            const secondaryLabel = showFullPath ? getRepoName(repo) : displayPath;
             
             return (
               <div
@@ -115,9 +102,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => onSelectRepo(repo)}
               >
                 <div className="repo-details">
-                  <span className="repo-name">{primaryLabel}</span>
-                  <span className="repo-path">{secondaryLabel}</span>
+                  <span className="repo-name">{getRepoName(repo)}</span>
+                  <span className="repo-path">{displayPath}</span>
                 </div>
+                <button
+                  type="button"
+                  className="btn-repo-action"
+                  title="Open folder"
+                  aria-label="Open folder"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    invoke('open_folder', { path: repo }).catch((err) => console.error('Failed to open folder:', err));
+                  }}
+                >
+                  <FolderOpen size={16} />
+                </button>
                 <button
                   type="button"
                   className="btn-remove-repo"
