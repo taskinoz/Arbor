@@ -1,18 +1,37 @@
 import React, { useState, useEffect } from 'react';
 import { X, Loader2, GitBranch } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { toDisplayPath } from '../utils/path';
+import { ApplyEntry, FileResult, LinkMode, RepoFiles } from '../types';
+import { FilePicker, FileResults, useFileSelection } from './FilePicker';
+import { toDisplayPath, resolveWorktreeBase, lastSegment } from '../utils/path';
+
+const BRANCH_PREFIX = 'feature/';
 
 interface GraftModalProps {
   repoPath: string;
   homeDir: string | null;
+  worktreeDir: string;
+  // Per-repo base branch override; unset means use the repo's GitHub default.
+  defaultBranch?: string;
+  files: RepoFiles;
+  linkModes: { agent: LinkMode; env: LinkMode };
   onClose: () => void;
-  onSubmit: (path: string, branch: string, newBranch: boolean, baseBranch?: string) => Promise<void>;
+  onSubmit: (
+    path: string,
+    branch: string,
+    newBranch: boolean,
+    baseBranch: string | undefined,
+    files: ApplyEntry[]
+  ) => Promise<FileResult[]>;
 }
 
 export const GraftModal: React.FC<GraftModalProps> = ({
   repoPath,
   homeDir,
+  worktreeDir,
+  defaultBranch,
+  files,
+  linkModes,
   onClose,
   onSubmit,
 }) => {
@@ -20,6 +39,8 @@ export const GraftModal: React.FC<GraftModalProps> = ({
   const [loadingBranches, setLoadingBranches] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<FileResult[] | null>(null);
+  const selection = useFileSelection(files, linkModes);
 
   // Form states
   const [path, setPath] = useState('');
@@ -28,27 +49,37 @@ export const GraftModal: React.FC<GraftModalProps> = ({
   const [baseBranch, setBaseBranch] = useState('');
   const [existingBranch, setExistingBranch] = useState('');
 
-  // Find parent folder of the repo to show in the helper text
-  const parentFolder = toDisplayPath(
-    repoPath.substring(0, repoPath.lastIndexOf('/')) || 'parent folder',
-    homeDir
-  );
+  const isAbsolutePath = path.trim().startsWith('/');
+  const fullPath = isAbsolutePath
+    ? path.trim()
+    : `${resolveWorktreeBase(repoPath, worktreeDir, homeDir)}/${path.trim()}`;
+  const previewPath = toDisplayPath(path.trim() ? fullPath : `${fullPath}[folder-name]`, homeDir);
+
+  // The branch name follows the worktree name until the user types their own.
+  const worktreeName = lastSegment(path.trim()).replace(/\s+/g, '-');
+  const suggestedBranch = worktreeName ? `${BRANCH_PREFIX}${worktreeName}` : '';
 
   useEffect(() => {
     const fetchBranches = async () => {
       try {
-        const list: string[] = await invoke('get_git_branches', { repoPath });
+        const [list, githubDefault] = await Promise.all([
+          invoke<string[]>('get_git_branches', { repoPath }),
+          defaultBranch
+            ? Promise.resolve(null)
+            : invoke<string | null>('get_default_branch', { repoPath }).catch(() => null),
+        ]);
         setBranches(list);
         if (list.length > 0) {
-          // Set defaults - prioritize main or master
-          const defaultBranch = list.find((b) => 
-            b === 'main' || 
-            b === 'master' || 
-            b === 'origin/main' || 
-            b === 'origin/master'
-          ) || list[0];
-          setBaseBranch(defaultBranch);
-          setExistingBranch(defaultBranch);
+          // Repo override, then GitHub's default, then main/master, then anything.
+          const find = (name?: string | null) =>
+            name ? list.find((b) => b === name) ?? list.find((b) => b === `origin/${name}`) : undefined;
+          const base =
+            find(defaultBranch) ??
+            find(githubDefault) ??
+            list.find((b) => ['main', 'master', 'origin/main', 'origin/master'].includes(b)) ??
+            list[0];
+          setBaseBranch(base);
+          setExistingBranch(base);
         }
       } catch (err: any) {
         setError(err?.toString() || 'Failed to fetch branches');
@@ -57,7 +88,7 @@ export const GraftModal: React.FC<GraftModalProps> = ({
       }
     };
     fetchBranches();
-  }, [repoPath]);
+  }, [repoPath, defaultBranch]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,7 +97,7 @@ export const GraftModal: React.FC<GraftModalProps> = ({
       return;
     }
 
-    const branchToUse = isNewBranch ? newBranchName.trim() : existingBranch;
+    const branchToUse = isNewBranch ? newBranchName.trim() || suggestedBranch : existingBranch;
     if (!branchToUse) {
       setError(isNewBranch ? 'New branch name is required' : 'An existing branch must be selected');
       return;
@@ -75,13 +106,16 @@ export const GraftModal: React.FC<GraftModalProps> = ({
     setSubmitting(true);
     setError(null);
     try {
-      await onSubmit(
-        path.trim(),
+      const res = await onSubmit(
+        fullPath,
         branchToUse,
         isNewBranch,
-        isNewBranch ? baseBranch : undefined
+        isNewBranch ? baseBranch : undefined,
+        selection.build()
       );
-      onClose();
+      // Surface skipped files instead of closing; a clean run just closes.
+      if (res.some((r) => r.status === 'skipped')) setResults(res);
+      else onClose();
     } catch (err: any) {
       setError(err?.toString() || 'Failed to create worktree');
     } finally {
@@ -99,7 +133,17 @@ export const GraftModal: React.FC<GraftModalProps> = ({
           </button>
         </div>
 
-        {loadingBranches ? (
+        {results ? (
+          <>
+            <span className="form-help">The worktree was created, but some files were not added:</span>
+            <FileResults results={results} />
+            <div className="modal-footer">
+              <button type="button" className="btn-add" style={{ width: 'auto', padding: '10px 24px' }} onClick={onClose}>
+                Done
+              </button>
+            </div>
+          </>
+        ) : loadingBranches ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 0', gap: '12px' }}>
             <Loader2 className="loading-spinner" size={32} style={{ color: 'var(--accent-green)' }} />
             <span style={{ color: 'var(--text-muted)' }}>Retrieving git branches...</span>
@@ -125,8 +169,8 @@ export const GraftModal: React.FC<GraftModalProps> = ({
                 spellCheck={false}
               />
               <span className="form-help">
-                Relative folder names will be created in:<br />
-                <span className="mono" style={{ fontSize: '0.8rem', color: '#fff' }}>{parentFolder}/{path || '[folder-name]'}</span>
+                Will be created in:<br />
+                <span className="mono" style={{ fontSize: '0.8rem', color: '#fff' }}>{previewPath}</span>
               </span>
             </div>
 
@@ -158,7 +202,7 @@ export const GraftModal: React.FC<GraftModalProps> = ({
                     id="new-branch-name"
                     type="text"
                     className="form-input"
-                    placeholder="feature/something-awesome"
+                    placeholder={suggestedBranch || `${BRANCH_PREFIX}something-awesome`}
                     value={newBranchName}
                     onChange={(e) => setNewBranchName(e.target.value)}
                     disabled={submitting}
@@ -166,6 +210,7 @@ export const GraftModal: React.FC<GraftModalProps> = ({
                     autoCorrect="off"
                     spellCheck={false}
                   />
+                  <span className="form-help">Leave blank to use the worktree name.</span>
                 </div>
 
                 {/* Base branch select */}
@@ -215,6 +260,8 @@ export const GraftModal: React.FC<GraftModalProps> = ({
                 )}
               </div>
             )}
+
+            <FilePicker files={files} selection={selection} disabled={submitting} />
 
             {error && (
               <div style={{ color: 'var(--accent-red)', fontSize: '0.85rem', wordBreak: 'break-word', marginTop: '4px' }}>

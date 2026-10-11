@@ -3,13 +3,15 @@ import { Sidebar } from './components/Sidebar';
 import { TreeCanvas } from './components/TreeCanvas';
 import { DetailsPanel } from './components/DetailsPanel';
 import { GraftModal } from './components/GraftModal';
-import { WorktreeInfo } from './types';
+import { ApplyEntry, Editor, FileResult, WorktreeInfo } from './types';
 import { invoke } from '@tauri-apps/api/core';
 import { GitFork, RefreshCw, Plus, Sparkles } from 'lucide-react';
-import { toDisplayPath } from './utils/path';
+import { toDisplayPath, resolveWorktreeBase } from './utils/path';
 import { ThemeName, applyTheme, currentSeason } from './theme';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { SettingsModal } from './components/SettingsModal';
+import { WorktreeFilesModal } from './components/WorktreeFilesModal';
+import { EMPTY_FILES, hasUsableFiles } from './components/FilePicker';
 import './App.css';
 
 function App() {
@@ -19,6 +21,8 @@ function App() {
   const [selectedWt, setSelectedWt] = useState<WorktreeInfo | null>(null);
   const [popupSide, setPopupSide] = useState<'left' | 'right'>('right');
   const [homeDir, setHomeDir] = useState<string | null>(null);
+  const [editors, setEditors] = useState<Editor[]>([]);
+  const [filesTarget, setFilesTarget] = useState<WorktreeInfo | null>(null);
 
   // Settings states
   const [settings, setSettings] = useState(loadSettings);
@@ -73,7 +77,20 @@ function App() {
       }
     };
     fetchHomeDir();
+    refreshEditors();
   }, []);
+
+  const refreshEditors = async () => {
+    try {
+      setEditors(await invoke<Editor[]>('detect_editors'));
+    } catch (err) {
+      console.error('Failed to detect editors:', err);
+    }
+  };
+
+  const editor = editors.find((e) => e.id === settings.openWith) ?? editors[0] ?? null;
+  const repoFiles = (activeRepo && settings.repoFiles[activeRepo]) || EMPTY_FILES;
+  const linkModes = { agent: settings.agentLinkMode, env: settings.envLinkMode };
 
   // Fetch worktrees whenever the active repository changes
   useEffect(() => {
@@ -150,11 +167,12 @@ function App() {
     }
   };
 
-  const handleOpenInCode = async (path: string) => {
+  const handleOpenInEditor = async (path: string) => {
+    if (!editor) return;
     try {
-      await invoke('open_in_vscode', { path });
+      await invoke('open_in_editor', { editorId: editor.id, path });
     } catch (err: any) {
-      alert(err?.toString() || 'Failed to open in VS Code');
+      alert(err?.toString() || `Failed to open in ${editor.label}`);
     }
   };
 
@@ -172,18 +190,39 @@ function App() {
     path: string,
     branch: string,
     newBranch: boolean,
-    baseBranch?: string
-  ) => {
-    if (!activeRepo) return;
+    baseBranch: string | undefined,
+    files: ApplyEntry[]
+  ): Promise<FileResult[]> => {
+    if (!activeRepo) return [];
+    // When worktrees live inside the repo, hide that folder from git status.
+    const base = resolveWorktreeBase(activeRepo, settings.worktreeDir, homeDir);
+    const excludeDir =
+      settings.excludeFromGit && base.startsWith(`${activeRepo}/`) ? base.slice(activeRepo.length + 1) : undefined;
     await invoke('create_worktree', {
       repoPath: activeRepo,
       path,
       branch,
       newBranch,
       baseBranch,
+      excludeDir,
     });
+    // The worktree exists now, so a failure adding files must not fail the graft.
+    let results: FileResult[] = [];
+    if (files.length > 0) {
+      try {
+        results = await invoke<FileResult[]>('apply_worktree_files', {
+          repoPath: activeRepo,
+          worktreePath: path,
+          entries: files,
+          exclude: settings.excludeFromGit,
+        });
+      } catch (err: any) {
+        results = [{ name: 'files', status: 'skipped', message: err?.toString() ?? 'Failed to add files' }];
+      }
+    }
     // Refresh worktree list and select the branch we just grafted
     await loadWorktrees(activeRepo, false, branch);
+    return results;
   };
 
   const handleSelectWt = (wt: WorktreeInfo, side: 'left' | 'right') => {
@@ -212,7 +251,10 @@ function App() {
         onSelectRepo={handleSelectRepo}
         onAddRepo={handleAddRepo}
         onRemoveRepo={handleRemoveRepo}
-        onOpenSettings={() => setShowSettings(true)}
+        onOpenSettings={() => {
+          refreshEditors();
+          setShowSettings(true);
+        }}
         homeDir={homeDir}
       />
 
@@ -275,9 +317,23 @@ function App() {
                 side={popupSide}
                 homeDir={homeDir}
                 onClose={() => setSelectedWt(null)}
-                onOpenInCode={handleOpenInCode}
+                editorLabel={editor?.label ?? null}
+                onOpenInEditor={handleOpenInEditor}
+                onAddFiles={hasUsableFiles(repoFiles) ? () => setFilesTarget(selectedWt) : undefined}
                 onDeleteWorktree={handleDeleteWorktree}
                 onRefresh={() => loadWorktrees(activeRepo, true)}
+              />
+            )}
+
+            {filesTarget && (
+              <WorktreeFilesModal
+                repoPath={activeRepo}
+                worktreePath={filesTarget.path}
+                files={repoFiles}
+                linkModes={linkModes}
+                exclude={settings.excludeFromGit}
+                onApplied={() => loadWorktrees(activeRepo, true)}
+                onClose={() => setFilesTarget(null)}
               />
             )}
 
@@ -286,6 +342,10 @@ function App() {
               <GraftModal
                 repoPath={activeRepo}
                 homeDir={homeDir}
+                worktreeDir={settings.worktreeDir}
+                defaultBranch={settings.repoDefaultBranch[activeRepo]}
+                files={repoFiles}
+                linkModes={linkModes}
                 onClose={() => setShowGraftModal(false)}
                 onSubmit={handleGraftSubmit}
               />
@@ -312,6 +372,10 @@ function App() {
         <SettingsModal
           settings={settings}
           activeTheme={activeTheme}
+          repos={repos}
+          activeRepo={activeRepo}
+          homeDir={homeDir}
+          editors={editors}
           onChange={updateSettings}
           onClose={() => setShowSettings(false)}
         />

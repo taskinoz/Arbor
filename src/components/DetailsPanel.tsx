@@ -15,6 +15,7 @@ import {
   ArrowUp,
   Loader2,
   GitPullRequest,
+  FilePlus,
 } from 'lucide-react';
 
 type SyncAction = 'fetch' | 'pull' | 'push' | null;
@@ -25,7 +26,9 @@ interface DetailsPanelProps {
   side: 'left' | 'right';
   homeDir: string | null;
   onClose: () => void;
-  onOpenInCode: (path: string) => Promise<void>;
+  editorLabel: string | null;
+  onOpenInEditor: (path: string) => Promise<void>;
+  onAddFiles?: () => void;
   onDeleteWorktree: (path: string, force: boolean) => Promise<void>;
   onRefresh: () => Promise<void>;
 }
@@ -36,7 +39,9 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   side,
   homeDir,
   onClose,
-  onOpenInCode,
+  editorLabel,
+  onOpenInEditor,
+  onAddFiles,
   onDeleteWorktree,
   onRefresh,
 }) => {
@@ -360,11 +365,20 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         <button
           type="button"
           className="btn-action primary"
-          onClick={() => onOpenInCode(worktree.path)}
+          onClick={() => onOpenInEditor(worktree.path)}
+          disabled={!editorLabel}
+          title={editorLabel ? undefined : 'No supported editor found - see Settings'}
         >
           <Code size={16} />
-          <span>Open in VS Code</span>
+          <span>{editorLabel ? `Open in ${editorLabel}` : 'No editor found'}</span>
         </button>
+
+        {onAddFiles && (
+          <button type="button" className="btn-action secondary" onClick={onAddFiles}>
+            <FilePlus size={16} />
+            <span>Add agent / env files</span>
+          </button>
+        )}
 
         {!worktree.is_main && (
           !showConfirm ? (

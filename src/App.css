@@ -1398,3 +1398,45 @@
   background: rgba(var(--accent-rgb), 0.15);
   color: #fff;
 }
+
+/* Agent / env file pickers and settings lists */
+.segmented-small button { padding: 4px 12px; font-size: 0.75rem; }
+
+.file-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.file-target {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+
+.file-results { display: flex; flex-direction: column; gap: 8px; }
+
+.file-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--accent-green);
+}
+
+.file-result svg { flex-shrink: 0; margin-top: 3px; }
+.file-result.skipped { color: var(--accent-amber); }
+.file-result-message { color: var(--text-muted); word-break: break-word; }
+
+.file-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.file-entry-row { display: flex; gap: 8px; align-items: center; }
+.file-entry-row .form-input { flex: 1; min-width: 0; padding: 9px 10px; font-size: 0.85rem; }

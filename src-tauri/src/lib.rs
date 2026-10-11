@@ -3,6 +3,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
+mod editors;
+mod files;
+
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 struct AppConfig {
     repos: Vec<String>,
@@ -319,6 +322,8 @@ async fn create_worktree(
     branch: String,
     new_branch: bool,
     base_branch: Option<String>,
+    // Folder inside the repo (e.g. ".worktree") to hide from `git status`.
+    exclude_dir: Option<String>,
 ) -> Result<(), String> {
     run_blocking(move || {
         let abs_path = if Path::new(&path).is_absolute() {
@@ -344,6 +349,10 @@ async fn create_worktree(
         }
 
         run_git_cmd(&repo_path, &args)?;
+        if let Some(dir) = exclude_dir.filter(|d| !d.trim().is_empty()) {
+            // Cosmetic: the worktree already exists, so don't fail the graft over it.
+            let _ = files::add_git_excludes(&repo_path, &[format!("/{}/", dir.trim_matches('/'))]);
+        }
         Ok(())
     })
     .await
@@ -363,38 +372,6 @@ async fn delete_worktree(repo_path: String, worktree_path: String, force: bool) 
 }
 
 #[tauri::command]
-async fn open_in_vscode(path: String) -> Result<(), String> {
-    run_blocking(move || {
-        let output = std::process::Command::new("code")
-            .arg(&path)
-            .env("PATH", augmented_path())
-            .output();
-
-        match output {
-            Ok(out) if out.status.success() => Ok(()),
-            Ok(out) => {
-                let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                if err.is_empty() {
-                    Err("Failed to open in VS Code. Make sure the 'code' command is in your PATH. In VS Code, run 'Shell Command: Install 'code' command in PATH'.".to_string())
-                } else {
-                    Err(format!("VS Code error: {}", err))
-                }
-            }
-            Err(_) => {
-                let open_output = std::process::Command::new("open")
-                    .args(&["-a", "Visual Studio Code", &path])
-                    .output();
-                match open_output {
-                    Ok(out) if out.status.success() => Ok(()),
-                    _ => Err("Failed to open in VS Code. Please make sure the 'code' command is installed in PATH, or VS Code is in your Applications folder.".to_string())
-                }
-            }
-        }
-    })
-    .await
-}
-
-#[tauri::command]
 async fn get_git_branches(repo_path: String) -> Result<Vec<String>, String> {
     run_blocking(move || {
         let output = run_git_cmd(&repo_path, &["branch", "--all", "--format=%(refname:short)"])?;
@@ -404,6 +381,31 @@ async fn get_git_branches(repo_path: String) -> Result<Vec<String>, String> {
             .filter(|line| !line.is_empty() && !line.contains("HEAD ->"))
             .collect();
         Ok(branches)
+    })
+    .await
+}
+
+// The repo's default branch name as GitHub sees it (via `gh`), falling back
+// to the remote HEAD git cached at clone time. None if neither is available.
+#[tauri::command]
+async fn get_default_branch(repo_path: String) -> Result<Option<String>, String> {
+    run_blocking(move || {
+        let from_gh = std::process::Command::new("gh")
+            .args(["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"])
+            .current_dir(&repo_path)
+            .env("PATH", augmented_path())
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .filter(|name| !name.is_empty());
+
+        Ok(from_gh.or_else(|| {
+            run_git_cmd(&repo_path, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+                .ok()
+                .map(|r| r.strip_prefix("origin/").unwrap_or(&r).to_string())
+                .filter(|name| !name.is_empty())
+        }))
     })
     .await
 }
@@ -560,8 +562,11 @@ pub fn run() {
             get_worktrees,
             create_worktree,
             delete_worktree,
-            open_in_vscode,
+            editors::detect_editors,
+            editors::open_in_editor,
+            files::apply_worktree_files,
             get_git_branches,
+            get_default_branch,
             get_sync_status,
             git_fetch,
             git_pull,
