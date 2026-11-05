@@ -16,6 +16,7 @@ import {
   Loader2,
   GitPullRequest,
   FilePlus,
+  Terminal,
 } from 'lucide-react';
 
 type SyncAction = 'fetch' | 'pull' | 'push' | null;
@@ -29,6 +30,7 @@ interface DetailsPanelProps {
   editorLabel: string | null;
   onOpenInEditor: (path: string) => Promise<void>;
   onAddFiles?: () => void;
+  onRunCommand: () => void;
   onDeleteWorktree: (path: string, force: boolean) => Promise<void>;
   onRefresh: () => Promise<void>;
 }
@@ -42,6 +44,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   editorLabel,
   onOpenInEditor,
   onAddFiles,
+  onRunCommand,
   onDeleteWorktree,
   onRefresh,
 }) => {
@@ -371,6 +374,11 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         >
           <Code size={16} />
           <span>{editorLabel ? `Open in ${editorLabel}` : 'No editor found'}</span>
+        </button>
+
+        <button type="button" className="btn-action secondary" onClick={onRunCommand}>
+          <Terminal size={16} />
+          <span>Run command</span>
         </button>
 
         {onAddFiles && (

@@ -274,6 +274,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   Pre-selected as the base when grafting a new branch in this repo.
                 </span>
               </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="settings-setup-command">Run after grafting</label>
+                <input
+                  id="settings-setup-command"
+                  type="text"
+                  className="form-input mono"
+                  placeholder="npm install"
+                  value={settings.repoSetupCommand[repo] ?? ''}
+                  onChange={(e) => {
+                    const next = { ...settings.repoSetupCommand };
+                    if (e.target.value) next[repo] = e.target.value;
+                    else delete next[repo];
+                    onChange({ repoSetupCommand: next });
+                  }}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">
+                  Optional. Offered in the Graft dialog and run in the new worktree; you can change or clear it per graft.
+                </span>
+              </div>
               <FileListEditor
                 title="Agent files"
                 hint="Instruction files such as CLAUDE.md. Targets are paths inside the worktree."

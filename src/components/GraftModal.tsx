@@ -14,6 +14,8 @@ interface GraftModalProps {
   // Per-repo base branch override; unset means use the repo's GitHub default.
   defaultBranch?: string;
   files: RepoFiles;
+  // Command offered to run in the new worktree (the repo's saved one).
+  setupCommand: string;
   linkModes: { agent: LinkMode; env: LinkMode };
   onClose: () => void;
   onSubmit: (
@@ -21,7 +23,8 @@ interface GraftModalProps {
     branch: string,
     newBranch: boolean,
     baseBranch: string | undefined,
-    files: ApplyEntry[]
+    files: ApplyEntry[],
+    command: string
   ) => Promise<FileResult[]>;
 }
 
@@ -31,6 +34,7 @@ export const GraftModal: React.FC<GraftModalProps> = ({
   worktreeDir,
   defaultBranch,
   files,
+  setupCommand,
   linkModes,
   onClose,
   onSubmit,
@@ -40,6 +44,7 @@ export const GraftModal: React.FC<GraftModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<FileResult[] | null>(null);
+  const [runAfter, setRunAfter] = useState(setupCommand);
   const selection = useFileSelection(files, linkModes);
 
   // Form states
@@ -111,7 +116,8 @@ export const GraftModal: React.FC<GraftModalProps> = ({
         branchToUse,
         isNewBranch,
         isNewBranch ? baseBranch : undefined,
-        selection.build()
+        selection.build(),
+        runAfter.trim()
       );
       // Surface skipped files instead of closing; a clean run just closes.
       if (res.some((r) => r.status === 'skipped')) setResults(res);
@@ -262,6 +268,24 @@ export const GraftModal: React.FC<GraftModalProps> = ({
             )}
 
             <FilePicker files={files} selection={selection} disabled={submitting} />
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="graft-command">
+                Run a command in the new worktree (optional)
+              </label>
+              <input
+                id="graft-command"
+                type="text"
+                className="form-input mono"
+                placeholder="npm install"
+                value={runAfter}
+                onChange={(e) => setRunAfter(e.target.value)}
+                disabled={submitting}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
 
             {error && (
               <div style={{ color: 'var(--accent-red)', fontSize: '0.85rem', wordBreak: 'break-word', marginTop: '4px' }}>

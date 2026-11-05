@@ -30,6 +30,7 @@ Click a node to open its details card:
 - Ahead/behind counts with **Fetch**, **Pull** and **Push** buttons.
 - A link to the branch's GitHub pull request, if there is one.
 - **Open in** your editor of choice (see [Open with](#open-with)).
+- **Run command** to run a shell command in that worktree (see [Run commands](#run-commands)).
 - **Add agent / env files** to the worktree after the fact.
 - **Delete Worktree**, with a confirmation and an explicit force option for worktrees with uncommitted changes.
 
@@ -43,6 +44,7 @@ The **Graft Branch** button creates a worktree for a new or existing branch.
 - The dialog previews exactly where the worktree will be created.
 - The base branch is pre-selected from your per-repo setting, falling back to the repository's default branch on GitHub.
 - Pick which [agent and env files](#agent-and-env-files) to add, and whether each kind is symlinked or copied for this one worktree.
+- Optionally [run a command](#run-commands) in the new worktree as soon as it exists, such as `npm install`. The command is pre-filled from the repo's saved setting and can be changed or cleared for each graft.
 
 ### Agent and env files
 
@@ -64,6 +66,18 @@ A few safeguards are built in:
 - If a file can't be added, the worktree is still created and you get a short report of what was skipped and why.
 - Optionally, the worktree folder and the added files are hidden from `git status` through the repo's local `.git/info/exclude`. Nothing is committed.
 
+### Run commands
+
+Select a worktree and choose **Run command** to run any shell command inside it, for example `npm install`, `npm run build` or `git log -5`.
+
+![The Run Command dialog showing the streamed output of a build](docs/screenshots/run-command.png)
+
+- Output streams in live, with stderr included, and the dialog shows whether the command finished successfully or with an error code.
+- **Stop** ends the command and anything it started. Closing the dialog also stops it, so it isn't a way to leave a dev server running.
+- Commands run in your login shell, so tools installed through nvm, asdf and similar are found even though Arbor was launched from the Dock.
+- Recent commands are remembered per repository and suggested as you type.
+- Commands can only run inside a worktree of the selected repository.
+
 ### Open with
 
 Arbor detects the editors installed on your machine and lets you choose which one the details card opens. It looks at installed apps (macOS) and your `PATH`, and recognises VS Code (and Insiders), VSCodium, Cursor, Windsurf, Zed, Sublime Text, Visual Studio (Windows), WebStorm, IntelliJ IDEA, PyCharm, RustRover, Android Studio, Xcode and Nova. Only the ones you have appear in the list.
@@ -80,7 +94,7 @@ Arbor detects the editors installed on your machine and lets you choose which on
 | Worktree directory | Where new worktrees are created. Relative paths live inside the repo root (default `.worktree`); absolute and `~` paths also work. |
 | Agent / env link mode | Symlink or copy, set separately for each kind. |
 | Hide from git status | Adds the worktree folder and added files to `.git/info/exclude`. |
-| Repository | Per repo: the base branch for new branches (default: GitHub's default branch), and its agent and env files. |
+| Repository | Per repo: the base branch for new branches (default: GitHub's default branch), a command to run after grafting, and its agent and env files. |
 
 ![Per-repository settings with agent and env file entries](docs/screenshots/settings-files.png)
 
@@ -128,6 +142,7 @@ Pushing a tag that starts with `v` (for example `v0.4.0`) runs the release workf
 | `src-tauri/src/lib.rs` | Git and GitHub commands exposed to the frontend |
 | `src-tauri/src/files.rs` | Linking and copying agent/env files, with tests |
 | `src-tauri/src/editors.rs` | Editor detection and launching |
+| `src-tauri/src/commands.rs` | Running shell commands in a worktree and streaming their output, with tests |
 
 Your tracked repositories are stored in the app's config directory (on macOS, `~/Library/Application Support/com.arbor.app/`). Settings, including per-repo files, are stored in the app's local storage.
 

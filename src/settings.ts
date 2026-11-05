@@ -26,6 +26,10 @@ export interface Settings {
   excludeFromGit: boolean;
   // Editor id for "Open in ..."; '' means the first one detected.
   openWith: string;
+  // Per repo: a command offered in the Graft dialog to run in each new worktree.
+  repoSetupCommand: Record<string, string>;
+  // Per repo: recently run commands, newest first.
+  repoCommandHistory: Record<string, string[]>;
 }
 
 const DEFAULTS: Settings = {
@@ -40,6 +44,8 @@ const DEFAULTS: Settings = {
   repoFiles: {},
   excludeFromGit: true,
   openWith: '',
+  repoSetupCommand: {},
+  repoCommandHistory: {},
 };
 
 const KEY = 'arbor.settings';

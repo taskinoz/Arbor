@@ -1440,3 +1440,34 @@
 
 .file-entry-row { display: flex; gap: 8px; align-items: center; }
 .file-entry-row .form-input { flex: 1; min-width: 0; padding: 9px 10px; font-size: 0.85rem; }
+
+/* Run command dialog */
+.command-modal { width: 720px; max-width: 92vw; }
+
+.command-output {
+  margin: 0;
+  max-height: 320px;
+  min-height: 120px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.command-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.command-status.exited { color: var(--accent-green); }
+.command-status.stopped { color: var(--accent-amber); }
+.command-status.error { color: var(--accent-red); word-break: break-word; }

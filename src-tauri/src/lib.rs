@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
+mod commands;
 mod editors;
 mod files;
 
@@ -553,6 +554,7 @@ fn set_app_icon(app: tauri::AppHandle, png: Vec<u8>) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(commands::Running::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -565,6 +567,8 @@ pub fn run() {
             editors::detect_editors,
             editors::open_in_editor,
             files::apply_worktree_files,
+            commands::run_command,
+            commands::stop_command,
             get_git_branches,
             get_default_branch,
             get_sync_status,

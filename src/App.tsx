@@ -11,6 +11,7 @@ import { ThemeName, applyTheme, currentSeason } from './theme';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { SettingsModal } from './components/SettingsModal';
 import { WorktreeFilesModal } from './components/WorktreeFilesModal';
+import { CommandModal } from './components/CommandModal';
 import { EMPTY_FILES, hasUsableFiles } from './components/FilePicker';
 import './App.css';
 
@@ -23,6 +24,11 @@ function App() {
   const [homeDir, setHomeDir] = useState<string | null>(null);
   const [editors, setEditors] = useState<Editor[]>([]);
   const [filesTarget, setFilesTarget] = useState<WorktreeInfo | null>(null);
+  // A command to run in a worktree: the dialog is open (runTarget), or waiting
+  // for the Graft dialog to close first (pendingRun).
+  type RunRequest = { path: string; label: string; command: string; autoRun: boolean };
+  const [runTarget, setRunTarget] = useState<RunRequest | null>(null);
+  const [pendingRun, setPendingRun] = useState<RunRequest | null>(null);
 
   // Settings states
   const [settings, setSettings] = useState(loadSettings);
@@ -148,6 +154,24 @@ function App() {
     }
   };
 
+  // Open the command dialog once the Graft dialog (and any file report) is gone.
+  useEffect(() => {
+    if (pendingRun && !showGraftModal) {
+      setRunTarget(pendingRun);
+      setPendingRun(null);
+    }
+  }, [pendingRun, showGraftModal]);
+
+  const rememberCommand = (command: string) => {
+    if (!activeRepo) return;
+    updateSettings({
+      repoCommandHistory: {
+        ...settings.repoCommandHistory,
+        [activeRepo]: [command, ...(settings.repoCommandHistory[activeRepo] ?? []).filter((c) => c !== command)].slice(0, 10),
+      },
+    });
+  };
+
   const handleSelectRepo = (repoPath: string) => {
     setActiveRepo(repoPath);
   };
@@ -191,7 +215,8 @@ function App() {
     branch: string,
     newBranch: boolean,
     baseBranch: string | undefined,
-    files: ApplyEntry[]
+    files: ApplyEntry[],
+    command: string
   ): Promise<FileResult[]> => {
     if (!activeRepo) return [];
     // When worktrees live inside the repo, hide that folder from git status.
@@ -222,6 +247,7 @@ function App() {
     }
     // Refresh worktree list and select the branch we just grafted
     await loadWorktrees(activeRepo, false, branch);
+    if (command) setPendingRun({ path, label: branch, command, autoRun: true });
     return results;
   };
 
@@ -320,6 +346,14 @@ function App() {
                 editorLabel={editor?.label ?? null}
                 onOpenInEditor={handleOpenInEditor}
                 onAddFiles={hasUsableFiles(repoFiles) ? () => setFilesTarget(selectedWt) : undefined}
+                onRunCommand={() =>
+                  setRunTarget({
+                    path: selectedWt.path,
+                    label: selectedWt.branch ?? selectedWt.path.split('/').pop() ?? selectedWt.path,
+                    command: '',
+                    autoRun: false,
+                  })
+                }
                 onDeleteWorktree={handleDeleteWorktree}
                 onRefresh={() => loadWorktrees(activeRepo, true)}
               />
@@ -337,6 +371,21 @@ function App() {
               />
             )}
 
+            {runTarget && (
+              <CommandModal
+                key={`${runTarget.path}:${runTarget.command}`}
+                repoPath={activeRepo}
+                worktreePath={runTarget.path}
+                homeDir={homeDir}
+                label={runTarget.label}
+                initialCommand={runTarget.command}
+                autoRun={runTarget.autoRun}
+                history={settings.repoCommandHistory[activeRepo] ?? []}
+                onRan={rememberCommand}
+                onClose={() => setRunTarget(null)}
+              />
+            )}
+
             {/* Graft Modal Dialog */}
             {showGraftModal && (
               <GraftModal
@@ -345,6 +394,7 @@ function App() {
                 worktreeDir={settings.worktreeDir}
                 defaultBranch={settings.repoDefaultBranch[activeRepo]}
                 files={repoFiles}
+                setupCommand={settings.repoSetupCommand[activeRepo] ?? ''}
                 linkModes={linkModes}
                 onClose={() => setShowGraftModal(false)}
                 onSubmit={handleGraftSubmit}
