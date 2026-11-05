@@ -109,6 +109,8 @@ Arbor detects the editors installed on your machine and lets you choose which on
 
 Download the latest build for your platform from the [Releases](https://github.com/taskinoz/Arbor/releases) page, or build it yourself below.
 
+On macOS, use the `aarch64` .dmg on Apple Silicon and the `x64` one on Intel. The app isn't notarized by Apple yet, so the first time you open it macOS will say it can't verify the app. Go to **System Settings › Privacy & Security**, scroll down and choose **Open Anyway**. You only need to do this once.
+
 ## Development
 
 You'll need Node.js 20.19+, a Rust toolchain, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
