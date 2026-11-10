@@ -7,6 +7,7 @@ export interface WorktreeInfo {
   is_main: boolean;
   is_clean: boolean;
   remote_status: RemoteStatus;
+  created_ms: number | null;
 }
 
 export interface SyncStatus {

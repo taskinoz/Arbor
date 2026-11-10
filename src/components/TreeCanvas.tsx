@@ -162,9 +162,20 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   // stays visible either way, as the tree's anchor.
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState<'any' | 'today' | '7d' | '30d'>('any');
   const trimmedQuery = searchQuery.trim().toLowerCase();
+  // Earliest creation time the date filter allows; "today" means since local midnight.
+  const createdAfter =
+    dateFilter === 'today'
+      ? new Date().setHours(0, 0, 0, 0)
+      : dateFilter === '7d'
+      ? Date.now() - 7 * 86_400_000
+      : dateFilter === '30d'
+      ? Date.now() - 30 * 86_400_000
+      : null;
   const matchesQuery = (wt: WorktreeInfo) => {
     if (statusFilter !== 'all' && getStatusClass(wt) !== statusFilter) return false;
+    if (createdAfter !== null && (wt.created_ms === null || wt.created_ms < createdAfter)) return false;
     if (!trimmedQuery) return true;
     const branch = (wt.branch || 'detached').toLowerCase();
     const folder = wt.path.split('/').pop()?.toLowerCase() || '';
@@ -543,9 +554,21 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             <option value="merged">Merged</option>
             <option value="remote-gone">Deleted</option>
           </select>
+          <select
+            className="canvas-status-filter"
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value as typeof dateFilter)}
+            aria-label="Filter by date created"
+            title="Filter by date created"
+          >
+            <option value="any">Any time</option>
+            <option value="today">Today</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+          </select>
         </div>
       )}
-      {worktrees.length > 0 && (trimmedQuery || statusFilter !== 'all') && additionalWts.length === 0 && (
+      {worktrees.length > 0 && (trimmedQuery || statusFilter !== 'all' || dateFilter !== 'any') && additionalWts.length === 0 && (
         <div className="canvas-search-empty">No branches match the current filter</div>
       )}
       {worktrees.length > 0 && (

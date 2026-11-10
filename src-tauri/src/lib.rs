@@ -20,6 +20,9 @@ struct WorktreeInfo {
     is_main: bool,
     is_clean: bool,
     remote_status: String,
+    // When the worktree folder was created (ms since the epoch), for the
+    // date filters. None if the filesystem doesn't record it.
+    created_ms: Option<u64>,
 }
 
 // Classifies a branch's relationship to its remote-tracking ref.
@@ -226,6 +229,7 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
                 is_main: false,
                 is_clean: true,
                 remote_status: "no_remote".to_string(),
+                created_ms: None,
             });
         } else if line.starts_with("HEAD ") {
             if let Some(ref mut wt) = current_wt {
@@ -274,6 +278,11 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
                     if let Some(branch) = wt.branch.clone() {
                         wt.remote_status = get_remote_status(&wt.path, &branch);
                     }
+                    wt.created_ms = fs::metadata(&wt.path)
+                        .and_then(|m| m.created())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as u64);
                 });
             }
         });
