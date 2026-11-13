@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { WorktreeInfo } from '../types';
-import { RefreshCw, Plus, Minus, Maximize2, Search, X } from 'lucide-react';
+import { RefreshCw, Plus, Minus, Maximize2, Search, X, Trash2 } from 'lucide-react';
 import { toDisplayPath } from '../utils/path';
 
 const MIN_ZOOM = 0.4;
@@ -14,6 +14,8 @@ interface TreeCanvasProps {
   isLoading: boolean;
   homeDir: string | null;
   treeLabel: 'worktree' | 'branch';
+  // Opens the bulk-remove dialog for the worktrees the filters currently show.
+  onRemoveShown: (worktrees: WorktreeInfo[]) => void;
 }
 
 export const TreeCanvas: React.FC<TreeCanvasProps> = ({
@@ -23,6 +25,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   isLoading,
   homeDir,
   treeLabel,
+  onRemoveShown,
 }) => {
   const [hoveredWt, setHoveredWt] = useState<string | null>(null);
 
@@ -566,6 +569,16 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             <option value="7d">Last 7 days</option>
             <option value="30d">Last 30 days</option>
           </select>
+          <button
+            type="button"
+            className="canvas-search-clear canvas-remove-shown"
+            onClick={() => onRemoveShown(additionalWts)}
+            disabled={additionalWts.length === 0}
+            aria-label="Remove the worktrees shown"
+            title="Remove the worktrees shown…"
+          >
+            <Trash2 size={14} />
+          </button>
         </div>
       )}
       {worktrees.length > 0 && (trimmedQuery || statusFilter !== 'all' || dateFilter !== 'any') && additionalWts.length === 0 && (

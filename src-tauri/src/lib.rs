@@ -37,18 +37,22 @@ struct WorktreeInfo {
 // `git ls-remote` whether that ref still exists there right now - falling
 // back to the stale local cache only if the live check itself fails (e.g.
 // offline), since stale-but-present is still better than nothing.
+//
+// An upstream that's a *differently named* branch doesn't count: a branch
+// created from `origin/develop` tracks develop by git's default, but it has
+// no remote branch of its own, so it's "no_remote" rather than "remote_gone".
 fn get_remote_status(repo_path: &str, branch: &str) -> String {
     let refname = format!("refs/heads/{}", branch);
     let output = run_git_cmd(
         repo_path,
         &[
             "for-each-ref",
-            "--format=%(upstream)%00%(upstream:remotename)%00%(upstream:track)",
+            "--format=%(upstream:remoteref)%00%(upstream:remotename)%00%(upstream:track)",
             &refname,
         ],
     );
 
-    let (upstream, remote_name, track) = match output {
+    let (remote_ref, remote_name, track) = match output {
         Ok(line) => {
             let mut parts = line.splitn(3, '\u{0}');
             (
@@ -60,7 +64,7 @@ fn get_remote_status(repo_path: &str, branch: &str) -> String {
         Err(_) => return "no_remote".to_string(),
     };
 
-    if upstream.is_empty() {
+    if remote_ref != refname {
         return "no_remote".to_string();
     }
 
@@ -347,6 +351,9 @@ async fn create_worktree(
 
         let mut args = vec!["worktree", "add", &path_str];
         if new_branch {
+            // Without this, a branch started from `origin/develop` would track
+            // develop. It gets its own upstream on first push instead.
+            args.push("--no-track");
             args.push("-b");
             args.push(&branch);
             if let Some(ref base) = base_branch {
@@ -376,6 +383,28 @@ async fn delete_worktree(repo_path: String, worktree_path: String, force: bool) 
             args.push("--force");
         }
         run_git_cmd(&repo_path, &args)?;
+        Ok(())
+    })
+    .await
+}
+
+// Deletes a local branch. Without `force` git refuses unless the branch is
+// fully merged, so unmerged work survives a bulk removal. `force` is for
+// squash-merged PR branches, which git can't recognise as merged - but even
+// then a branch with commits its upstream doesn't have is kept, so work done
+// after the merge and never pushed isn't thrown away.
+#[tauri::command]
+async fn delete_branch(repo_path: String, branch: String, force: bool) -> Result<(), String> {
+    run_blocking(move || {
+        if force {
+            let range = format!("{branch}@{{upstream}}..{branch}");
+            let unpushed = run_git_cmd(&repo_path, &["rev-list", "--count", &range])
+                .map_err(|_| "branch has no upstream to compare against".to_string())?;
+            if unpushed != "0" {
+                return Err(format!("branch has {unpushed} unpushed commit(s)"));
+            }
+        }
+        run_git_cmd(&repo_path, &["branch", if force { "-D" } else { "-d" }, &branch])?;
         Ok(())
     })
     .await
@@ -427,11 +456,22 @@ struct SyncStatus {
     has_upstream: bool,
 }
 
+// Whether the worktree's checked-out branch tracks a remote branch of the same
+// name. A branch that tracks the branch it was created from (e.g. develop)
+// doesn't: pulling would merge develop in and `git push` refuses outright.
+fn has_own_upstream(path: &str) -> bool {
+    let Ok(branch) = run_git_cmd(path, &["symbolic-ref", "--quiet", "HEAD"]) else {
+        return false; // detached HEAD
+    };
+    run_git_cmd(path, &["for-each-ref", "--format=%(upstream:remoteref)", &branch])
+        .map(|remote_ref| remote_ref == branch)
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 async fn get_sync_status(path: String) -> Result<SyncStatus, String> {
     run_blocking(move || {
-        let upstream_check = run_git_cmd(&path, &["rev-parse", "--abbrev-ref", "@{u}"]);
-        if upstream_check.is_err() {
+        if !has_own_upstream(&path) {
             return Ok(SyncStatus {
                 ahead: 0,
                 behind: 0,
@@ -463,12 +503,32 @@ async fn git_fetch(path: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn git_pull(path: String) -> Result<String, String> {
-    run_blocking(move || run_git_cmd(&path, &["pull"])).await
+    run_blocking(move || {
+        if !has_own_upstream(&path) {
+            return Err("This branch isn't on the remote yet, so there's nothing to pull. Push it first.".to_string());
+        }
+        run_git_cmd(&path, &["pull"])
+    })
+    .await
 }
 
 #[tauri::command]
 async fn git_push(path: String) -> Result<String, String> {
-    run_blocking(move || run_git_cmd(&path, &["push"])).await
+    run_blocking(move || {
+        if has_own_upstream(&path) {
+            return run_git_cmd(&path, &["push"]);
+        }
+        // First push (or a branch tracking the branch it was created from):
+        // publish it under its own name and make that its upstream.
+        let branch = run_git_cmd(&path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .map_err(|_| "Can't push a detached HEAD".to_string())?;
+        let remote = run_git_cmd(&path, &["config", &format!("branch.{branch}.remote")])
+            .ok()
+            .filter(|r| !r.is_empty() && r != ".")
+            .unwrap_or_else(|| "origin".to_string());
+        run_git_cmd(&path, &["push", "-u", &remote, "HEAD"])
+    })
+    .await
 }
 
 #[tauri::command]
@@ -573,6 +633,7 @@ pub fn run() {
             get_worktrees,
             create_worktree,
             delete_worktree,
+            delete_branch,
             editors::detect_editors,
             editors::open_in_editor,
             files::apply_worktree_files,
@@ -591,4 +652,94 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn force_delete_keeps_branches_with_unpushed_commits() {
+        let dir = std::env::temp_dir().join(format!("arbor-branch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        git(&dir, &["init", "-q", "--bare", "origin.git"]);
+        git(&dir, &["clone", "-q", "origin.git", "repo"]);
+        let repo = dir.join("repo");
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        for b in ["pushed", "ahead"] {
+            git(&repo, &["checkout", "-q", "-b", b]);
+            git(&repo, &["commit", "-q", "--allow-empty", "-m", b]);
+            git(&repo, &["push", "-q", "-u", "origin", b]);
+        }
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "after merge, never pushed"]);
+        git(&repo, &["checkout", "-q", "-"]);
+        git(&repo, &["checkout", "-q", "--detach"]);
+
+        let repo_s = repo.to_str().unwrap().to_string();
+        let delete = |b: &str| tauri::async_runtime::block_on(delete_branch(repo_s.clone(), b.to_string(), true));
+        assert_eq!(delete("pushed"), Ok(()));
+        assert_eq!(delete("ahead"), Err("branch has 1 unpushed commit(s)".to_string()));
+        assert!(run_git_cmd(&repo_s, &["rev-parse", "--verify", "refs/heads/ahead"]).is_ok(), "kept");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn branch_tracking_its_base_has_no_upstream_until_pushed() {
+        let dir = std::env::temp_dir().join(format!("arbor-upstream-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        git(&dir, &["init", "-q", "--bare", "origin.git"]);
+        git(&dir, &["clone", "-q", "origin.git", "repo"]);
+        let repo = dir.join("repo");
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        git(&repo, &["push", "-q", "-u", "origin", "HEAD:develop"]);
+        git(&repo, &["fetch", "-q"]);
+        // How the eye-view branches were made: git's default makes them track develop.
+        let wt = dir.join("wt");
+        git(&repo, &["worktree", "add", "-q", "-b", "fix/thing", wt.to_str().unwrap(), "origin/develop"]);
+        let (repo_s, wt_s) = (repo.to_str().unwrap(), wt.to_str().unwrap().to_string());
+
+        assert_eq!(get_remote_status(repo_s, "fix/thing"), "no_remote", "not 'remote_gone'");
+        assert!(!has_own_upstream(&wt_s));
+        let sync = tauri::async_runtime::block_on(get_sync_status(wt_s.clone())).unwrap();
+        assert!(!sync.has_upstream, "no ahead/behind against develop");
+        assert!(tauri::async_runtime::block_on(git_pull(wt_s.clone())).is_err(), "won't merge develop in");
+
+        // Push publishes it under its own name and fixes the upstream.
+        tauri::async_runtime::block_on(git_push(wt_s.clone())).unwrap();
+        assert!(has_own_upstream(&wt_s));
+        assert_eq!(get_remote_status(repo_s, "fix/thing"), "has_remote");
+
+        // New worktrees from Arbor don't pick up the base as upstream at all.
+        let wt2 = dir.join("wt2").to_str().unwrap().to_string();
+        tauri::async_runtime::block_on(create_worktree(
+            repo_s.to_string(), wt2.clone(), "feat/new".into(), true, Some("origin/develop".into()), None,
+        ))
+        .unwrap();
+        assert_eq!(run_git_cmd(repo_s, &["for-each-ref", "--format=%(upstream)", "refs/heads/feat/new"]), Ok(String::new()));
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

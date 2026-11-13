@@ -12,6 +12,7 @@ import { Settings, loadSettings, saveSettings } from './settings';
 import { SettingsModal } from './components/SettingsModal';
 import { WorktreeFilesModal } from './components/WorktreeFilesModal';
 import { CommandModal } from './components/CommandModal';
+import { BulkRemoveModal } from './components/BulkRemoveModal';
 import { EMPTY_FILES, hasUsableFiles } from './components/FilePicker';
 import './App.css';
 
@@ -28,6 +29,7 @@ function App() {
   // for the Graft dialog to close first (pendingRun).
   type RunRequest = { path: string; label: string; command: string; autoRun: boolean };
   const [runTarget, setRunTarget] = useState<RunRequest | null>(null);
+  const [bulkRemove, setBulkRemove] = useState<WorktreeInfo[] | null>(null);
   const [pendingRun, setPendingRun] = useState<RunRequest | null>(null);
 
   // Settings states
@@ -319,6 +321,7 @@ function App() {
               isLoading={isLoadingWorktrees}
               homeDir={homeDir}
               treeLabel={settings.treeLabel}
+              onRemoveShown={setBulkRemove}
             />
 
             {/* Floating button to Graft new branches */}
@@ -368,6 +371,16 @@ function App() {
                 exclude={settings.excludeFromGit}
                 onApplied={() => loadWorktrees(activeRepo, true)}
                 onClose={() => setFilesTarget(null)}
+              />
+            )}
+
+            {bulkRemove && (
+              <BulkRemoveModal
+                repoPath={activeRepo}
+                worktrees={bulkRemove}
+                homeDir={homeDir}
+                onDone={() => loadWorktrees(activeRepo, true)}
+                onClose={() => setBulkRemove(null)}
               />
             )}
 
