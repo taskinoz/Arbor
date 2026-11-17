@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { WorktreeInfo } from '../types';
-import { RefreshCw, Plus, Minus, Maximize2, Search, X, Trash2 } from 'lucide-react';
+import { RefreshCw, Plus, Minus, Maximize2, Search, X, Trash2, Lock } from 'lucide-react';
 import { toDisplayPath } from '../utils/path';
 import { HoverCard } from './HoverCard';
 
@@ -17,6 +17,7 @@ interface TreeCanvasProps {
   treeLabel: 'worktree' | 'branch';
   // Opens the bulk-remove dialog for the worktrees the filters currently show.
   onRemoveShown: (worktrees: WorktreeInfo[]) => void;
+  staleDays: number;
 }
 
 export const TreeCanvas: React.FC<TreeCanvasProps> = ({
@@ -27,6 +28,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   homeDir,
   treeLabel,
   onRemoveShown,
+  staleDays,
 }) => {
   const [hoveredWt, setHoveredWt] = useState<string | null>(null);
   // The hover card shows after a short pause on a node, so sweeping the
@@ -176,6 +178,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   // with no remote, or whose remote was deleted, is more important to flag
   // at a glance than whether it has local changes.
   const getStatusClass = (wt: WorktreeInfo) => {
+    if (wt.missing) return 'missing';
     if (wt.remote_status === 'remote_gone') return 'remote-gone';
     if (wt.remote_status === 'merged') return 'merged';
     if (wt.remote_status === 'no_remote') return 'no-remote';
@@ -198,7 +201,12 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       ? Date.now() - 30 * 86_400_000
       : null;
   const matchesQuery = (wt: WorktreeInfo) => {
-    if (statusFilter !== 'all' && getStatusClass(wt) !== statusFilter) return false;
+    if (statusFilter === 'stale') {
+      // No commits in staleDays, by commit time (survives clones, unlike folder dates).
+      if (!wt.last_commit || wt.last_commit.time_ms > Date.now() - staleDays * 86_400_000) return false;
+    } else if (statusFilter === 'locked') {
+      if (wt.locked === null) return false;
+    } else if (statusFilter !== 'all' && getStatusClass(wt) !== statusFilter) return false;
     if (createdAfter !== null && (wt.created_ms === null || wt.created_ms < createdAfter)) return false;
     if (!trimmedQuery) return true;
     const branch = (wt.branch || 'detached').toLowerCase();
@@ -447,6 +455,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   strokeWidth={2.5}
                   filter={isSelected || hoveredWt === b.wt.path ? 'url(#glow)' : undefined}
                 />
+                {b.wt.locked !== null && (
+                  <Lock x={b.leafX - 4.5} y={b.leafY - 4.5} size={9} strokeWidth={3} className="node-lock" />
+                )}
                 
                 {/* Labels (truncated with a native tooltip for the full name).
                     Settings pick whether the worktree folder or the branch
@@ -584,6 +595,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             <option value="no-remote">Untracked</option>
             <option value="merged">Merged</option>
             <option value="remote-gone">Deleted</option>
+            <option value="stale">Stale ({staleDays}+ days)</option>
+            <option value="locked">Locked</option>
+            <option value="missing">Missing folder</option>
           </select>
           <select
             className="canvas-status-filter"

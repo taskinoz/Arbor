@@ -171,6 +171,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               Dynamic switches the card to the opposite side of the selected node so it never covers it.
             </span>
           </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="stale-days">Stale after (days without a commit)</label>
+            <input
+              id="stale-days"
+              type="number"
+              min={1}
+              className="form-input"
+              style={{ width: 100 }}
+              value={settings.staleDays}
+              onChange={(e) => {
+                const n = Math.round(Number(e.target.value));
+                if (n >= 1) onChange({ staleDays: n });
+              }}
+            />
+            <span className="settings-hint">Used by the Stale status filter, so you can bulk-remove old worktrees.</span>
+          </div>
         </section>
 
         <section className="settings-section">

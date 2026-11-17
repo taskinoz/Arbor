@@ -36,6 +36,10 @@ struct WorktreeInfo {
     last_commit: Option<status::CommitInfo>,
     // A merge or rebase stopped part-way (e.g. on conflicts).
     operation: Option<String>,
+    // `git worktree lock`ed, with its reason ("" if none given).
+    locked: Option<String>,
+    // The folder is gone (deleted outside git); `git worktree prune` clears it.
+    missing: bool,
 }
 
 fn get_config_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -188,6 +192,8 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
                 behind: 0,
                 last_commit: None,
                 operation: None,
+                locked: None,
+                missing: false,
             });
         } else if line.starts_with("HEAD ") {
             if let Some(ref mut wt) = current_wt {
@@ -202,6 +208,14 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
                     full_branch.to_string()
                 };
                 wt.branch = Some(short_branch);
+            }
+        } else if line == "locked" || line.starts_with("locked ") {
+            if let Some(ref mut wt) = current_wt {
+                wt.locked = Some(line["locked".len()..].trim().to_string());
+            }
+        } else if line == "prunable" || line.starts_with("prunable ") {
+            if let Some(ref mut wt) = current_wt {
+                wt.missing = true;
             }
         }
     }
@@ -222,7 +236,7 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
 
     for chunk in worktrees.chunks_mut(ENRICH_CONCURRENCY) {
         std::thread::scope(|scope| {
-            for wt in chunk.iter_mut() {
+            for wt in chunk.iter_mut().filter(|wt| !wt.missing) {
                 scope.spawn(move || {
                     wt.is_clean = run_git_cmd(&wt.path, &["status", "--porcelain"])
                         .map(|out| out.is_empty())
@@ -343,6 +357,32 @@ async fn delete_branch(repo_path: String, branch: String, force: bool) -> Result
         Ok(())
     })
     .await
+}
+
+#[tauri::command]
+async fn delete_remote_branch(repo_path: String, remote: String, branch: String) -> Result<(), String> {
+    run_blocking(move || run_git_cmd(&repo_path, &["push", &remote, "--delete", &branch]).map(|_| ())).await
+}
+
+// git refuses to remove (or prune) a locked worktree without a double --force,
+// which Arbor never passes, so a lock guards it against bulk remove.
+#[tauri::command]
+async fn set_worktree_locked(repo_path: String, worktree_path: String, locked: bool) -> Result<(), String> {
+    run_blocking(move || {
+        let args: &[&str] = if locked {
+            &["worktree", "lock", "--reason", "Locked in Arbor", &worktree_path]
+        } else {
+            &["worktree", "unlock", &worktree_path]
+        };
+        run_git_cmd(&repo_path, args).map(|_| ())
+    })
+    .await
+}
+
+// Forgets worktrees whose folders were deleted outside git.
+#[tauri::command]
+async fn prune_worktrees(repo_path: String) -> Result<(), String> {
+    run_blocking(move || run_git_cmd(&repo_path, &["worktree", "prune"]).map(|_| ())).await
 }
 
 #[tauri::command]
@@ -525,6 +565,9 @@ pub fn run() {
             create_worktree,
             delete_worktree,
             delete_branch,
+            delete_remote_branch,
+            set_worktree_locked,
+            prune_worktrees,
             editors::detect_editors,
             editors::open_in_editor,
             files::apply_worktree_files,
@@ -561,6 +604,47 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reports_locked_and_missing_worktrees_and_lock_blocks_removal() {
+        let dir = std::env::temp_dir().join(format!("arbor-tidy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let repo = dir.join("repo");
+        let r = repo.to_str().unwrap().to_string();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C", &r])
+                .args(args)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        fs::create_dir_all(&repo).unwrap();
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        let (keep, gone) = (dir.join("keep"), dir.join("gone"));
+        git(&["worktree", "add", "-q", "-b", "keep", keep.to_str().unwrap()]);
+        git(&["worktree", "add", "-q", "-b", "gone", gone.to_str().unwrap()]);
+        fs::remove_dir_all(&gone).unwrap();
+        tauri::async_runtime::block_on(set_worktree_locked(r.clone(), keep.to_str().unwrap().into(), true)).unwrap();
+
+        let wts = get_worktrees_blocking(r.clone()).unwrap();
+        let find = |b: &str| wts.iter().find(|w| w.branch.as_deref() == Some(b)).unwrap();
+        assert_eq!(find("keep").locked.as_deref(), Some("Locked in Arbor"));
+        assert!(!find("keep").missing);
+        assert!(find("gone").missing);
+        assert!(find("gone").locked.is_none());
+
+        assert!(tauri::async_runtime::block_on(delete_worktree(r.clone(), keep.to_str().unwrap().into(), true)).is_err(), "locked survives remove");
+        tauri::async_runtime::block_on(prune_worktrees(r.clone())).unwrap();
+        let wts = get_worktrees_blocking(r.clone()).unwrap();
+        assert_eq!(wts.len(), 2, "missing one pruned, locked one kept");
+        tauri::async_runtime::block_on(set_worktree_locked(r.clone(), keep.to_str().unwrap().into(), false)).unwrap();
+        assert!(get_worktrees_blocking(r).unwrap()[1].locked.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn force_delete_keeps_branches_with_unpushed_commits() {

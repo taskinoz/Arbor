@@ -7,6 +7,8 @@ export interface Settings {
   autoTheme: boolean;
   // Which name is the bold label on tree nodes; the other goes underneath.
   treeLabel: 'worktree' | 'branch';
+  // A worktree whose last commit is older than this counts as stale.
+  staleDays: number;
   // Which side the details card opens on; 'dynamic' picks the side away
   // from the clicked node.
   detailsSide: 'left' | 'right' | 'dynamic';
@@ -46,6 +48,7 @@ const DEFAULTS: Settings = {
   theme: 'forest',
   autoTheme: false,
   treeLabel: 'worktree',
+  staleDays: 30,
   detailsSide: 'dynamic',
   worktreeDir: DEFAULT_WORKTREE_DIR,
   repoDefaultBranch: {},

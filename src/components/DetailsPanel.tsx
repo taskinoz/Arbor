@@ -15,6 +15,9 @@ import {
   Trash2,
   AlertTriangle,
   Copy,
+  Lock,
+  LockOpen,
+  FolderX,
   Check,
   Download,
   ArrowDown,
@@ -31,6 +34,7 @@ type SyncAction = 'fetch' | 'pull' | 'push' | null;
 
 interface DetailsPanelProps {
   worktree: WorktreeInfo;
+  repoPath: string;
   // The repo's base branch (e.g. develop), for "update from base".
   baseBranch: string | null;
   side: 'left' | 'right';
@@ -57,6 +61,7 @@ const sizeCache = new Map<string, number>();
 
 export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   worktree,
+  repoPath,
   baseBranch,
   side,
   homeDir,
@@ -83,6 +88,23 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [branchCopied, setBranchCopied] = useState(false);
   const [shaCopied, setShaCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tidyBusy, setTidyBusy] = useState(false);
+  const [tidyError, setTidyError] = useState<string | null>(null);
+  const locked = worktree.locked !== null;
+
+  // Lock/unlock and prune are quick local git calls, then a refresh.
+  const tidy = async (command: string, args: Record<string, unknown>) => {
+    setTidyBusy(true);
+    setTidyError(null);
+    try {
+      await invoke(command, { repoPath, ...args });
+      await onRefresh();
+    } catch (err: any) {
+      setTidyError(err?.toString() || 'Failed');
+    } finally {
+      setTidyBusy(false);
+    }
+  };
 
   // PR info comes from the background remote pass: undefined while it's
   // still loading, null when the branch has no PR.
@@ -219,6 +241,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         </div>
       </div>
 
+      {!worktree.missing && (<>
       <div className="detail-row">
         <span className="detail-label">Remote Sync</span>
         <div className="sync-status-line">
@@ -324,6 +347,8 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         </div>
       </div>
 
+      </>)}
+
       {worktree.branch && (
         <div className="detail-row">
           <span className="detail-label">Remote</span>
@@ -388,6 +413,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         </div>
       </div>
 
+      {!worktree.missing && (<>
       <div className="detail-row">
         <span className="detail-label">Size on Disk</span>
         {typeof size === 'number' ? (
@@ -401,6 +427,8 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
           </button>
         )}
       </div>
+
+      </>)}
 
       <div className="detail-row">
         <span className="detail-label">Last Commit</span>
@@ -429,6 +457,30 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         )}
       </div>
 
+      {worktree.missing ? (
+      <div className="panel-actions">
+        <div className="update-conflict">
+          <div className="update-conflict-title">
+            <FolderX size={14} />
+            <span>Folder missing</span>
+          </div>
+          <span className="form-help">
+            This worktree's folder was deleted outside Arbor, so git still lists it. Pruning removes the leftover entry;
+            the branch is kept.
+          </span>
+          <button
+            type="button"
+            className="btn-sync"
+            onClick={() => tidy('prune_worktrees', {})}
+            disabled={tidyBusy}
+          >
+            {tidyBusy ? <Loader2 size={14} className="loading-spinner" /> : null}
+            <span>Prune missing worktrees</span>
+          </button>
+          {tidyError && <span className="sync-feedback error">{tidyError}</span>}
+        </div>
+      </div>
+      ) : (
       <div className="panel-actions">
         <button
           type="button"
@@ -510,14 +562,31 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
         {!worktree.is_main && (
           !showConfirm ? (
-            <button
-              type="button"
-              className="btn-action danger"
-              onClick={() => setShowConfirm(true)}
-            >
-              <Trash2 size={16} />
-              <span>Delete Worktree</span>
-            </button>
+            <>
+              <div className="panel-action-pair">
+                <button
+                  type="button"
+                  className="btn-action secondary"
+                  onClick={() => tidy('set_worktree_locked', { worktreePath: worktree.path, locked: !locked })}
+                  disabled={tidyBusy}
+                  title={locked ? 'Allow this worktree to be removed again' : "Protect this worktree from being removed, including by bulk remove"}
+                >
+                  {locked ? <LockOpen size={16} /> : <Lock size={16} />}
+                  <span>{locked ? 'Unlock' : 'Lock'}</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn-action danger"
+                  onClick={() => setShowConfirm(true)}
+                  disabled={locked}
+                  title={locked ? 'Unlock it first' : undefined}
+                >
+                  <Trash2 size={16} />
+                  <span>Delete</span>
+                </button>
+              </div>
+              {tidyError && <span className="sync-feedback error">{tidyError}</span>}
+            </>
           ) : (
             <div
               style={{
@@ -583,6 +652,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
           )
         )}
       </div>
+      )}
       </div>
     </div>
   );

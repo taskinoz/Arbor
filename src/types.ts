@@ -38,6 +38,10 @@ export interface WorktreeInfo {
   last_commit: CommitInfo | null;
   // A merge or rebase stopped part-way (e.g. on conflicts).
   operation: 'merge' | 'rebase' | null;
+  // Locked with `git worktree lock` (the reason, "" if none), so it can't be removed.
+  locked: string | null;
+  // The folder was deleted outside git; pruning forgets it.
+  missing: boolean;
   // Filled in from RemoteInfo: undefined while loading, null when there's no PR.
   pr?: PrInfo | null;
 }

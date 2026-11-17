@@ -408,6 +408,7 @@ function App() {
               homeDir={homeDir}
               treeLabel={settings.treeLabel}
               onRemoveShown={setBulkRemove}
+              staleDays={settings.staleDays}
             />
 
             {/* Floating button to Graft new branches */}
@@ -428,6 +429,7 @@ function App() {
             {selectedWt && (
               <DetailsPanel
                 worktree={selectedWt}
+                repoPath={activeRepo}
                 baseBranch={
                   settings.repoDefaultBranch[activeRepo] ||
                   (githubDefault?.repo === activeRepo ? githubDefault.name : null)

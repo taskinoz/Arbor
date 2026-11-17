@@ -10,6 +10,7 @@ const STATUS: Record<string, string> = {
   'no-remote': 'Not on remote',
   merged: 'Merged, remote not deleted',
   'remote-gone': 'Remote branch deleted',
+  missing: 'Folder missing',
 };
 
 interface Props {

@@ -20,13 +20,20 @@ const folderName = (path: string) => path.split('/').pop() || path;
 
 export const BulkRemoveModal: React.FC<Props> = ({ repoPath, worktrees, homeDir, onDone, onClose }) => {
   // Worktrees with uncommitted changes start unticked: removing them loses work.
-  const [checked, setChecked] = useState(() => new Set(worktrees.filter((w) => w.is_clean).map((w) => w.path)));
+  // Locked ones can't be ticked at all.
+  const [checked, setChecked] = useState(
+    () => new Set(worktrees.filter((w) => w.is_clean && w.locked === null).map((w) => w.path))
+  );
   const [deleteBranches, setDeleteBranches] = useState(false);
+  const [deleteRemote, setDeleteRemote] = useState(false);
   const [running, setRunning] = useState(false);
   const [outcomes, setOutcomes] = useState<Record<string, Outcome> | null>(null);
 
   const chosen = worktrees.filter((w) => checked.has(w.path));
-  const dirtyChosen = chosen.filter((w) => !w.is_clean).length;
+  const dirtyChosen = chosen.filter((w) => !w.is_clean && !w.missing).length;
+  // Remote branches are only ever deleted for merged PRs.
+  const remoteDeletable = (w: WorktreeInfo) => w.remote_status === 'merged' && !!w.branch && !!w.upstream_remote;
+  const remoteChosen = chosen.filter(remoteDeletable).length;
 
   const toggle = (path: string) =>
     setChecked((prev) => {
@@ -40,9 +47,15 @@ export const BulkRemoveModal: React.FC<Props> = ({ repoPath, worktrees, homeDir,
   const removeAll = async () => {
     setRunning(true);
     const results: Record<string, Outcome> = {};
+    // Folders already deleted outside git: one prune clears every such entry.
+    let pruneError: unknown = null;
+    if (chosen.some((w) => w.missing)) {
+      await invoke('prune_worktrees', { repoPath }).catch((err) => (pruneError = err ?? 'Prune failed'));
+    }
     for (const wt of chosen) {
       try {
-        await invoke('delete_worktree', { repoPath, worktreePath: wt.path, force: !wt.is_clean });
+        if (!wt.missing) await invoke('delete_worktree', { repoPath, worktreePath: wt.path, force: !wt.is_clean });
+        else if (pruneError) throw pruneError;
       } catch (err: any) {
         results[wt.path] = { ok: false, message: err?.toString() || 'Failed to remove worktree' };
         setOutcomes({ ...results });
@@ -59,6 +72,15 @@ export const BulkRemoveModal: React.FC<Props> = ({ repoPath, worktrees, homeDir,
           message = 'Worktree and branch removed';
         } catch (err: any) {
           message = `Worktree removed, branch kept: ${err?.toString() || 'could not delete branch'}`;
+          warn = true;
+        }
+      }
+      if (deleteRemote && remoteDeletable(wt)) {
+        try {
+          await invoke('delete_remote_branch', { repoPath, remote: wt.upstream_remote, branch: wt.branch });
+          message += `; deleted ${wt.upstream_remote}/${wt.branch}`;
+        } catch (err: any) {
+          message += `; remote branch kept: ${err?.toString() || 'could not delete it'}`;
           warn = true;
         }
       }
@@ -99,7 +121,7 @@ export const BulkRemoveModal: React.FC<Props> = ({ repoPath, worktrees, homeDir,
                     className="form-checkbox"
                     checked={checked.has(wt.path)}
                     onChange={() => toggle(wt.path)}
-                    disabled={running || outcomes !== null}
+                    disabled={running || outcomes !== null || wt.locked !== null}
                   />
                 )}
                 <span className="bulk-row-text">
@@ -107,6 +129,10 @@ export const BulkRemoveModal: React.FC<Props> = ({ repoPath, worktrees, homeDir,
                   <span className="bulk-row-path mono">{toDisplayPath(wt.path, homeDir)}</span>
                   {outcome ? (
                     <span className="bulk-row-note">{outcome.message}</span>
+                  ) : wt.locked !== null ? (
+                    <span className="bulk-row-note">Locked; unlock it to remove</span>
+                  ) : wt.missing ? (
+                    <span className="bulk-row-note">Folder already gone; only git's record is removed</span>
                   ) : (
                     !wt.is_clean && (
                       <span className="bulk-row-note warn">Uncommitted changes will be lost</span>
@@ -131,8 +157,24 @@ export const BulkRemoveModal: React.FC<Props> = ({ repoPath, worktrees, homeDir,
             </label>
             <span className="form-help">
               Merged branches are force-deleted. Others are only deleted if git sees them as fully merged, so unmerged
-              work is kept. Remote branches are never touched.
+              work is kept.
             </span>
+            {remoteChosen > 0 && (
+              <>
+                <label className="form-checkbox-label">
+                  <input
+                    type="checkbox"
+                    className="form-checkbox"
+                    checked={deleteRemote}
+                    onChange={(e) => setDeleteRemote(e.target.checked)}
+                  />
+                  Also delete {remoteChosen} merged branch{remoteChosen === 1 ? '' : 'es'} on the remote
+                </label>
+                <span className="form-help">
+                  Only branches whose pull request was merged. This deletes them on GitHub for everyone.
+                </span>
+              </>
+            )}
             {dirtyChosen > 0 && (
               <div className="bulk-warning">
                 <AlertTriangle size={16} />
