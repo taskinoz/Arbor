@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 mod commands;
+mod status;
+mod sync;
+mod pr;
+mod terminals;
 mod editors;
 mod files;
 
@@ -19,70 +23,19 @@ struct WorktreeInfo {
     branch: Option<String>,
     is_main: bool,
     is_clean: bool,
+    // From local refs only; the UI refines it with `get_remote_info`.
     remote_status: String,
     // When the worktree folder was created (ms since the epoch), for the
     // date filters. None if the filesystem doesn't record it.
     created_ms: Option<u64>,
-}
-
-// Classifies a branch's relationship to its remote-tracking ref.
-//
-// `%(upstream:track)`'s `[gone]` marker only gets set by an explicit
-// `git fetch --prune` (or equivalent) *after* the remote branch was
-// deleted - until that happens, the local tracking ref just sits there
-// stale, looking exactly like a still-tracked branch. Since this app never
-// runs a prune itself, that stale-cache-only check was reporting plenty of
-// long-since-merged-and-deleted branches as "has_remote". So once we know a
-// branch has (or had) an upstream at all, we ask the remote directly via
-// `git ls-remote` whether that ref still exists there right now - falling
-// back to the stale local cache only if the live check itself fails (e.g.
-// offline), since stale-but-present is still better than nothing.
-//
-// An upstream that's a *differently named* branch doesn't count: a branch
-// created from `origin/develop` tracks develop by git's default, but it has
-// no remote branch of its own, so it's "no_remote" rather than "remote_gone".
-fn get_remote_status(repo_path: &str, branch: &str) -> String {
-    let refname = format!("refs/heads/{}", branch);
-    let output = run_git_cmd(
-        repo_path,
-        &[
-            "for-each-ref",
-            "--format=%(upstream:remoteref)%00%(upstream:remotename)%00%(upstream:track)",
-            &refname,
-        ],
-    );
-
-    let (remote_ref, remote_name, track) = match output {
-        Ok(line) => {
-            let mut parts = line.splitn(3, '\u{0}');
-            (
-                parts.next().unwrap_or("").trim().to_string(),
-                parts.next().unwrap_or("").trim().to_string(),
-                parts.next().unwrap_or("").trim().to_string(),
-            )
-        }
-        Err(_) => return "no_remote".to_string(),
-    };
-
-    if remote_ref != refname {
-        return "no_remote".to_string();
-    }
-
-    if !remote_name.is_empty() {
-        if let Ok(ls_output) = run_git_cmd(repo_path, &["ls-remote", "--heads", &remote_name, branch]) {
-            return if ls_output.trim().is_empty() {
-                "remote_gone".to_string()
-            } else {
-                "has_remote".to_string()
-            };
-        }
-    }
-
-    if track.contains("gone") {
-        "remote_gone".to_string()
-    } else {
-        "has_remote".to_string()
-    }
+    // Remote of the branch's own upstream (see status::BranchRef).
+    upstream_remote: Option<String>,
+    // Commits ahead of / behind the upstream, as of the last fetch.
+    ahead: u32,
+    behind: u32,
+    last_commit: Option<status::CommitInfo>,
+    // A merge or rebase stopped part-way (e.g. on conflicts).
+    operation: Option<String>,
 }
 
 fn get_config_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -206,11 +159,7 @@ async fn remove_repo(app_handle: tauri::AppHandle, path: String) -> Result<Vec<S
     .await
 }
 
-// How many worktrees to enrich (git status + live remote check) at once.
-// Each one may open its own network connection (the `ls-remote` inside
-// `get_remote_status`), so this is capped rather than left fully unbounded
-// to avoid hammering the remote with dozens of simultaneous connections on
-// repos with a lot of worktrees.
+// How many worktrees to run `git status` in at once.
 const ENRICH_CONCURRENCY: usize = 12;
 
 fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String> {
@@ -234,6 +183,11 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
                 is_clean: true,
                 remote_status: "no_remote".to_string(),
                 created_ms: None,
+                upstream_remote: None,
+                ahead: 0,
+                behind: 0,
+                last_commit: None,
+                operation: None,
             });
         } else if line.starts_with("HEAD ") {
             if let Some(ref mut wt) = current_wt {
@@ -259,19 +213,13 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
         worktrees[0].is_main = true;
     }
 
-    // Merged-PR lookup is one network call for the whole repo, so run it
-    // alongside the per-worktree enrichment rather than after it.
-    let merged_lookup = {
-        let repo_path = repo_path.clone();
-        std::thread::spawn(move || merged_pr_branches(&repo_path))
-    };
+    // Everything below is local: no network, so the tree can draw at once.
+    // Upstreams and last commits for every branch come from one git call
+    // each; only `git status` has to run per worktree.
+    let branches = status::local_branches(&repo_path);
+    let heads: Vec<String> = worktrees.iter().map(|wt| wt.head.clone()).collect();
+    let commits = status::commits(&repo_path, &heads);
 
-    // Second pass: enrich each worktree with its clean/dirty status and a
-    // live remote check, in parallel (bounded in batches) rather than one
-    // at a time - `get_remote_status` does a network round trip per tracked
-    // branch, so doing this sequentially for N worktrees took N round trips
-    // back to back, which is what made loading take up to a minute or two
-    // on repos with a lot of worktrees.
     for chunk in worktrees.chunks_mut(ENRICH_CONCURRENCY) {
         std::thread::scope(|scope| {
             for wt in chunk.iter_mut() {
@@ -279,9 +227,7 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
                     wt.is_clean = run_git_cmd(&wt.path, &["status", "--porcelain"])
                         .map(|out| out.is_empty())
                         .unwrap_or(false);
-                    if let Some(branch) = wt.branch.clone() {
-                        wt.remote_status = get_remote_status(&wt.path, &branch);
-                    }
+                    wt.operation = sync::operation_in_progress(&wt.path).map(String::from);
                     wt.created_ms = fs::metadata(&wt.path)
                         .and_then(|m| m.created())
                         .ok()
@@ -292,36 +238,25 @@ fn get_worktrees_blocking(repo_path: String) -> Result<Vec<WorktreeInfo>, String
         });
     }
 
-    let merged = merged_lookup.join().unwrap_or_default();
     for wt in worktrees.iter_mut() {
-        if wt.remote_status == "has_remote" && wt.branch.as_ref().is_some_and(|b| merged.contains(b)) {
-            wt.remote_status = "merged".to_string();
+        wt.last_commit = commits.get(&wt.head).cloned();
+        let Some(b) = wt.branch.as_ref().and_then(|name| branches.get(name)) else {
+            continue;
+        };
+        wt.upstream_remote = b.upstream_remote.clone();
+        wt.ahead = b.ahead;
+        wt.behind = b.behind;
+        // Provisional: "gone" is only known after a prune, and a deleted
+        // remote branch can still look present locally. The remote pass fixes both.
+        wt.remote_status = match (&b.upstream_remote, b.gone) {
+            (None, _) => "no_remote",
+            (Some(_), true) => "remote_gone",
+            (Some(_), false) => "has_remote",
         }
+        .to_string();
     }
 
     Ok(worktrees)
-}
-
-// Head branch names of merged GitHub PRs, via `gh`. Used to flag branches
-// that were merged but whose remote branch was never deleted. Checking PRs
-// rather than `git branch --merged` also catches squash/rebase merges. Any
-// failure (gh missing, not GitHub, offline) just means nothing is flagged.
-// ponytail: only the latest 500 merged PRs are checked; page if a repo outgrows that.
-fn merged_pr_branches(repo_path: &str) -> std::collections::HashSet<String> {
-    std::process::Command::new("gh")
-        .args(["pr", "list", "--state", "merged", "--json", "headRefName", "--limit", "500"])
-        .current_dir(repo_path)
-        .env("PATH", augmented_path())
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout).ok())
-        .map(|prs| {
-            prs.iter()
-                .filter_map(|pr| pr.get("headRefName")?.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -541,50 +476,6 @@ async fn get_home_dir() -> Result<Option<String>, String> {
     .await
 }
 
-// Looks up a GitHub pull request for a branch via the `gh` CLI, searching
-// across every state (open/closed/merged) so this still finds a PR whose
-// branch has since been deleted - `gh` keeps the head branch name on record
-// for a PR even after the ref itself is gone. Any failure (gh missing, not
-// authenticated, not a GitHub remote, no matching PR) is treated the same
-// as "no PR" rather than an error, since this is a best-effort nicety.
-#[tauri::command]
-async fn get_pr_url(repo_path: String, branch: String) -> Result<Option<String>, String> {
-    run_blocking(move || {
-        let output = std::process::Command::new("gh")
-            .args([
-                "pr", "list",
-                "--head", &branch,
-                "--state", "all",
-                "--json", "url",
-                "--limit", "1",
-            ])
-            .current_dir(&repo_path)
-            .env("PATH", augmented_path())
-            .output();
-
-        let output = match output {
-            Ok(out) if out.status.success() => out,
-            _ => return Ok(None),
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
-            Ok(v) => v,
-            Err(_) => return Ok(None),
-        };
-
-        let url = parsed
-            .as_array()
-            .and_then(|arr| arr.first())
-            .and_then(|pr| pr.get("url"))
-            .and_then(|u| u.as_str())
-            .map(|s| s.to_string());
-
-        Ok(url)
-    })
-    .await
-}
-
 // Opens a folder in the OS file manager (Finder / Explorer / xdg-open).
 #[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
@@ -646,12 +537,25 @@ pub fn run() {
             git_pull,
             git_push,
             get_home_dir,
-            get_pr_url,
             set_app_icon,
+            status::get_remote_info,
+            terminals::detect_terminals,
+            sync::sync_all,
+            pr::get_pr,
+            pr::create_pr_worktree,
+            sync::update_from_base,
+            sync::abort_update,
+            terminals::open_in_terminal,
+            status::get_dir_size,
             open_folder
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                commands::stop_all(app);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -722,7 +626,7 @@ mod tests {
         git(&repo, &["worktree", "add", "-q", "-b", "fix/thing", wt.to_str().unwrap(), "origin/develop"]);
         let (repo_s, wt_s) = (repo.to_str().unwrap(), wt.to_str().unwrap().to_string());
 
-        assert_eq!(get_remote_status(repo_s, "fix/thing"), "no_remote", "not 'remote_gone'");
+        assert_eq!(status::local_branches(repo_s)["fix/thing"].upstream_remote, None, "not its own upstream");
         assert!(!has_own_upstream(&wt_s));
         let sync = tauri::async_runtime::block_on(get_sync_status(wt_s.clone())).unwrap();
         assert!(!sync.has_upstream, "no ahead/behind against develop");
@@ -731,7 +635,7 @@ mod tests {
         // Push publishes it under its own name and fixes the upstream.
         tauri::async_runtime::block_on(git_push(wt_s.clone())).unwrap();
         assert!(has_own_upstream(&wt_s));
-        assert_eq!(get_remote_status(repo_s, "fix/thing"), "has_remote");
+        assert_eq!(status::local_branches(repo_s)["fix/thing"].upstream_remote.as_deref(), Some("origin"));
 
         // New worktrees from Arbor don't pick up the base as upstream at all.
         let wt2 = dir.join("wt2").to_str().unwrap().to_string();
@@ -743,3 +647,4 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 }
+

@@ -1,5 +1,27 @@
 export type RemoteStatus = 'has_remote' | 'no_remote' | 'remote_gone' | 'merged';
 
+export interface CommitInfo {
+  sha: string;
+  subject: string;
+  author: string;
+  time_ms: number;
+}
+
+export interface PrInfo {
+  number: number;
+  state: 'OPEN' | 'MERGED' | 'CLOSED';
+  isDraft: boolean;
+  url: string;
+  review: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
+  checks: 'passing' | 'failing' | 'pending' | null;
+}
+
+// Result of the background `get_remote_info` pass.
+export interface RemoteInfo {
+  remoteHeads: Record<string, string[]>;
+  prs: Record<string, PrInfo> | null;
+}
+
 export interface WorktreeInfo {
   path: string;
   head: string;
@@ -8,6 +30,16 @@ export interface WorktreeInfo {
   is_clean: boolean;
   remote_status: RemoteStatus;
   created_ms: number | null;
+  // Remote of the branch's own upstream, if it has one.
+  upstream_remote: string | null;
+  // Relative to the upstream, as of the last fetch.
+  ahead: number;
+  behind: number;
+  last_commit: CommitInfo | null;
+  // A merge or rebase stopped part-way (e.g. on conflicts).
+  operation: 'merge' | 'rebase' | null;
+  // Filled in from RemoteInfo: undefined while loading, null when there's no PR.
+  pr?: PrInfo | null;
 }
 
 export interface SyncStatus {
@@ -51,4 +83,17 @@ export interface FileResult {
 export interface Editor {
   id: string;
   label: string;
+}
+
+export interface SyncResult {
+  path: string;
+  branch: string | null;
+  outcome: 'pulled' | 'up_to_date' | 'skipped' | 'failed';
+  message: string;
+}
+
+export interface UpdateOutcome {
+  ok: boolean;
+  message: string;
+  conflicts: string[];
 }

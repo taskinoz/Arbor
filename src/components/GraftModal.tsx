@@ -1,11 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { X, Loader2, GitBranch } from 'lucide-react';
+import { X, Loader2, GitBranch, GitPullRequest } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { ApplyEntry, FileResult, LinkMode, RepoFiles } from '../types';
 import { FilePicker, FileResults, useFileSelection } from './FilePicker';
 import { toDisplayPath, resolveWorktreeBase, lastSegment } from '../utils/path';
 
 const BRANCH_PREFIX = 'feature/';
+
+interface PrSummary {
+  number: number;
+  title: string;
+  author: string;
+  head: string;
+  base: string;
+  state: string;
+  isDraft: boolean;
+  fromFork: boolean;
+  url: string;
+}
 
 interface GraftModalProps {
   repoPath: string;
@@ -26,6 +38,8 @@ interface GraftModalProps {
     files: ApplyEntry[],
     command: string
   ) => Promise<FileResult[]>;
+  // Graft from a pull request: `pr` is its number.
+  onSubmitPr: (path: string, pr: string, files: ApplyEntry[], command: string) => Promise<FileResult[]>;
 }
 
 export const GraftModal: React.FC<GraftModalProps> = ({
@@ -38,7 +52,12 @@ export const GraftModal: React.FC<GraftModalProps> = ({
   linkModes,
   onClose,
   onSubmit,
+  onSubmitPr,
 }) => {
+  const [source, setSource] = useState<'branch' | 'pr'>('branch');
+  const [prInput, setPrInput] = useState('');
+  const [pr, setPr] = useState<PrSummary | null>(null);
+  const [prLoading, setPrLoading] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -95,8 +114,48 @@ export const GraftModal: React.FC<GraftModalProps> = ({
     fetchBranches();
   }, [repoPath, defaultBranch]);
 
+  // Accepts a number, a PR URL, or a branch name (whatever `gh pr view` does).
+  const lookUpPr = async () => {
+    const query = prInput.trim();
+    if (!query || prLoading || (pr && (String(pr.number) === query || pr.url === query))) return;
+    setPrLoading(true);
+    setError(null);
+    setPr(null);
+    try {
+      const found = await invoke<PrSummary>('get_pr', { repoPath, pr: query });
+      setPr(found);
+      if (!path.trim()) setPath(`pr-${found.number}`);
+    } catch (err: any) {
+      setError(err?.toString() || 'Pull request not found');
+    } finally {
+      setPrLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (source === 'pr') {
+      if (!pr) {
+        lookUpPr();
+        return;
+      }
+      if (!path.trim()) {
+        setError('Path/folder name is required');
+        return;
+      }
+      setSubmitting(true);
+      setError(null);
+      try {
+        const res = await onSubmitPr(fullPath, String(pr.number), selection.build(), runAfter.trim());
+        if (res.some((r) => r.status === 'skipped')) setResults(res);
+        else onClose();
+      } catch (err: any) {
+        setError(err?.toString() || 'Failed to check out the pull request');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
     if (!path.trim()) {
       setError('Path/folder name is required');
       return;
@@ -156,6 +215,78 @@ export const GraftModal: React.FC<GraftModalProps> = ({
           </div>
         ) : (
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div className="segmented">
+              {(['branch', 'pr'] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={source === value ? 'active' : ''}
+                  onClick={() => {
+                    setSource(value);
+                    setError(null);
+                  }}
+                  disabled={submitting}
+                >
+                  {value === 'branch' ? 'Branch' : 'Pull request'}
+                </button>
+              ))}
+            </div>
+
+            {source === 'pr' && (
+              <div className="form-group">
+                <label className="form-label" htmlFor="graft-pr">
+                  Pull request
+                </label>
+                <div className="file-entry-row">
+                  <input
+                    id="graft-pr"
+                    type="text"
+                    className="form-input"
+                    placeholder="431 or https://github.com/org/repo/pull/431"
+                    value={prInput}
+                    onChange={(e) => {
+                      setPrInput(e.target.value);
+                      setPr(null);
+                    }}
+                    onBlur={lookUpPr}
+                    disabled={submitting}
+                    autoFocus
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    className="btn-action secondary"
+                    style={{ width: 'auto', padding: '10px 16px' }}
+                    onClick={lookUpPr}
+                    disabled={submitting || prLoading || !prInput.trim()}
+                  >
+                    {prLoading ? <Loader2 className="loading-spinner" size={14} /> : 'Look up'}
+                  </button>
+                </div>
+                {pr ? (
+                  <div className="pr-summary">
+                    <div className="pr-summary-title">
+                      <GitPullRequest size={14} />
+                      <span>
+                        #{pr.number} {pr.title}
+                      </span>
+                    </div>
+                    <span className="form-help">
+                      {pr.author} wants to merge <span className="mono">{pr.head}</span> into{' '}
+                      <span className="mono">{pr.base}</span>
+                      {pr.fromFork && ' (from a fork)'}
+                      {pr.isDraft && ' · draft'}
+                      {pr.state !== 'OPEN' && ` · ${pr.state.toLowerCase()}`}
+                    </span>
+                  </div>
+                ) : (
+                  <span className="form-help">Checked out with gh, so pull requests from forks work too.</span>
+                )}
+              </div>
+            )}
+
             {/* Folder / Path input */}
             <div className="form-group">
               <label className="form-label" htmlFor="graft-path">
@@ -169,7 +300,7 @@ export const GraftModal: React.FC<GraftModalProps> = ({
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 disabled={submitting}
-                autoFocus
+                autoFocus={source === 'branch'}
                 autoCapitalize="off"
                 autoCorrect="off"
                 spellCheck={false}
@@ -181,6 +312,7 @@ export const GraftModal: React.FC<GraftModalProps> = ({
             </div>
 
             {/* Toggle: New vs Existing */}
+            {source === 'branch' && (<>
             <div className="form-group" style={{ margin: '4px 0' }}>
               <label className="form-checkbox-label">
                 <input
@@ -266,6 +398,7 @@ export const GraftModal: React.FC<GraftModalProps> = ({
                 )}
               </div>
             )}
+            </>)}
 
             <FilePicker files={files} selection={selection} disabled={submitting} />
 
@@ -316,8 +449,8 @@ export const GraftModal: React.FC<GraftModalProps> = ({
                   </>
                 ) : (
                   <>
-                    <GitBranch size={16} />
-                    <span>Graft Branch</span>
+                    {source === 'pr' ? <GitPullRequest size={16} /> : <GitBranch size={16} />}
+                    <span>{source === 'pr' ? (pr ? `Check out #${pr.number}` : 'Look up PR') : 'Graft Branch'}</span>
                   </>
                 )}
               </button>

@@ -30,6 +30,16 @@ export interface Settings {
   repoSetupCommand: Record<string, string>;
   // Per repo: recently run commands, newest first.
   repoCommandHistory: Record<string, string[]>;
+  // Terminal id for "Open in terminal"; '' means the first one detected.
+  openTerminalWith: string;
+  // Per repo: one-click commands shown in the details card.
+  repoCommands: Record<string, SavedCommand[]>;
+}
+
+export interface SavedCommand {
+  id: string;
+  name: string;
+  command: string;
 }
 
 const DEFAULTS: Settings = {
@@ -46,6 +56,8 @@ const DEFAULTS: Settings = {
   openWith: '',
   repoSetupCommand: {},
   repoCommandHistory: {},
+  openTerminalWith: '',
+  repoCommands: {},
 };
 
 const KEY = 'arbor.settings';

@@ -1,11 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TreeCanvas } from './components/TreeCanvas';
 import { DetailsPanel } from './components/DetailsPanel';
 import { GraftModal } from './components/GraftModal';
-import { ApplyEntry, Editor, FileResult, WorktreeInfo } from './types';
+import { ApplyEntry, Editor, FileResult, RemoteInfo, WorktreeInfo } from './types';
+import { applyRemoteInfo } from './status';
+import { useRuns } from './runs';
+import { RunsMenu } from './components/RunsMenu';
+import { SyncAllMenu } from './components/SyncAllMenu';
 import { invoke } from '@tauri-apps/api/core';
-import { GitFork, RefreshCw, Plus, Sparkles } from 'lucide-react';
+import { GitFork, RefreshCw, Plus, Sparkles, Loader2 } from 'lucide-react';
 import { toDisplayPath, resolveWorktreeBase } from './utils/path';
 import { ThemeName, applyTheme, currentSeason } from './theme';
 import { Settings, loadSettings, saveSettings } from './settings';
@@ -19,15 +23,24 @@ import './App.css';
 function App() {
   const [repos, setRepos] = useState<string[]>([]);
   const [activeRepo, setActiveRepo] = useState<string | null>(null);
-  const [worktrees, setWorktrees] = useState<WorktreeInfo[]>([]);
-  const [selectedWt, setSelectedWt] = useState<WorktreeInfo | null>(null);
+  // Local-only data from get_worktrees, refined by the background remote pass.
+  const [localWorktrees, setLocalWorktrees] = useState<WorktreeInfo[]>([]);
+  const [remoteInfo, setRemoteInfo] = useState<{ repo: string; info: RemoteInfo } | null>(null);
+  const [remoteLoading, setRemoteLoading] = useState(false);
+  const remoteRequest = useRef(0);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // The repo's default branch on GitHub, looked up once per repo.
+  const [githubDefault, setGithubDefault] = useState<{ repo: string; name: string | null } | null>(null);
   const [popupSide, setPopupSide] = useState<'left' | 'right'>('right');
   const [homeDir, setHomeDir] = useState<string | null>(null);
   const [editors, setEditors] = useState<Editor[]>([]);
   const [filesTarget, setFilesTarget] = useState<WorktreeInfo | null>(null);
   // A command to run in a worktree: the dialog is open (runTarget), or waiting
   // for the Graft dialog to close first (pendingRun).
-  type RunRequest = { path: string; label: string; command: string; autoRun: boolean };
+  // runId shows an existing run; autoRun starts `command` when it opens.
+  type RunRequest = { path: string; label: string; command: string; autoRun?: boolean; runId?: string };
+  const runs = useRuns();
+  const [terminals, setTerminals] = useState<Editor[]>([]);
   const [runTarget, setRunTarget] = useState<RunRequest | null>(null);
   const [bulkRemove, setBulkRemove] = useState<WorktreeInfo[] | null>(null);
   const [pendingRun, setPendingRun] = useState<RunRequest | null>(null);
@@ -91,28 +104,58 @@ function App() {
   const refreshEditors = async () => {
     try {
       setEditors(await invoke<Editor[]>('detect_editors'));
+      setTerminals(await invoke<Editor[]>('detect_terminals'));
     } catch (err) {
       console.error('Failed to detect editors:', err);
     }
   };
 
   const editor = editors.find((e) => e.id === settings.openWith) ?? editors[0] ?? null;
+  const terminal = terminals.find((t) => t.id === settings.openTerminalWith) ?? terminals[0] ?? null;
   const repoFiles = (activeRepo && settings.repoFiles[activeRepo]) || EMPTY_FILES;
   const linkModes = { agent: settings.agentLinkMode, env: settings.envLinkMode };
+
+  const worktrees = useMemo(
+    () => applyRemoteInfo(localWorktrees, remoteInfo && remoteInfo.repo === activeRepo ? remoteInfo.info : null),
+    [localWorktrees, remoteInfo, activeRepo]
+  );
+  // Looked up by path so the details card follows refreshed data.
+  const selectedWt = worktrees.find((w) => w.path === selectedPath) ?? null;
+  const setSelectedWt = (wt: WorktreeInfo | null) => setSelectedPath(wt?.path ?? null);
+
+  // The slow part (ls-remote + gh): runs after the tree is on screen, and is
+  // dropped if a newer refresh or a repo switch has started since.
+  const loadRemoteInfo = async (repoPath: string) => {
+    const request = ++remoteRequest.current;
+    setRemoteLoading(true);
+    try {
+      const info = await invoke<RemoteInfo>('get_remote_info', { repoPath });
+      if (request === remoteRequest.current) setRemoteInfo({ repo: repoPath, info });
+    } catch (err) {
+      console.error('Failed to load remote info:', err);
+    } finally {
+      if (request === remoteRequest.current) setRemoteLoading(false);
+    }
+  };
 
   // Fetch worktrees whenever the active repository changes
   useEffect(() => {
     if (!activeRepo) {
-      setWorktrees([]);
+      setLocalWorktrees([]);
       setSelectedWt(null);
       return;
     }
     // Clear the tree immediately rather than leaving the previous repo's
     // (now stale) tree dimmed underneath a spinner - the canvas goes blank
     // with a loading throbber, then the new tree grows in once it arrives.
-    setWorktrees([]);
+    setLocalWorktrees([]);
+    setRemoteInfo(null);
     setSelectedWt(null);
     loadWorktrees(activeRepo);
+    const repo = activeRepo;
+    invoke<string | null>('get_default_branch', { repoPath: repo })
+      .then((name) => setGithubDefault({ repo, name }))
+      .catch(() => setGithubDefault({ repo, name: null }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRepo]);
 
@@ -122,7 +165,8 @@ function App() {
     if (!preserveSelection) setSelectedWt(null);
     try {
       const list: WorktreeInfo[] = await invoke('get_worktrees', { repoPath });
-      setWorktrees(list);
+      setLocalWorktrees(list);
+      loadRemoteInfo(repoPath);
       // Just grafted a branch - select the worktree for it regardless of
       // whatever was selected before, so the new branch is front-and-center.
       if (selectBranch) {
@@ -150,7 +194,7 @@ function App() {
       }
     } catch (err) {
       console.error('Failed to load worktrees:', err);
-      setWorktrees([]);
+      setLocalWorktrees([]);
     } finally {
       setIsLoadingWorktrees(false);
     }
@@ -158,8 +202,13 @@ function App() {
 
   // Open the command dialog once the Graft dialog (and any file report) is gone.
   useEffect(() => {
-    if (pendingRun && !showGraftModal) {
-      setRunTarget(pendingRun);
+    if (pendingRun && !showGraftModal && activeRepo) {
+      const request = pendingRun;
+      if (request.autoRun) {
+        runs.start(activeRepo, request.path, request.label, request.command).then((runId) => setRunTarget({ ...request, runId }));
+      } else {
+        setRunTarget(request);
+      }
       setPendingRun(null);
     }
   }, [pendingRun, showGraftModal]);
@@ -202,6 +251,17 @@ function App() {
     }
   };
 
+  const handleOpenInTerminal = async (path: string) => {
+    if (!terminal) return;
+    try {
+      await invoke('open_in_terminal', { terminalId: terminal.id, path });
+    } catch (err: any) {
+      alert(err?.toString() || `Failed to open ${terminal.label}`);
+    }
+  };
+
+  const wtLabel = (wt: WorktreeInfo) => wt.branch ?? wt.path.split('/').pop() ?? wt.path;
+
   const handleDeleteWorktree = async (path: string, force: boolean) => {
     if (!activeRepo) return;
     await invoke('delete_worktree', { repoPath: activeRepo, worktreePath: path, force });
@@ -221,18 +281,33 @@ function App() {
     command: string
   ): Promise<FileResult[]> => {
     if (!activeRepo) return [];
-    // When worktrees live inside the repo, hide that folder from git status.
-    const base = resolveWorktreeBase(activeRepo, settings.worktreeDir, homeDir);
-    const excludeDir =
-      settings.excludeFromGit && base.startsWith(`${activeRepo}/`) ? base.slice(activeRepo.length + 1) : undefined;
     await invoke('create_worktree', {
       repoPath: activeRepo,
       path,
       branch,
       newBranch,
       baseBranch,
-      excludeDir,
+      excludeDir: graftExcludeDir(),
     });
+    return finishGraft(path, branch, files, command);
+  };
+
+  // When worktrees live inside the repo, hide that folder from git status.
+  const graftExcludeDir = () => {
+    if (!activeRepo) return undefined;
+    const base = resolveWorktreeBase(activeRepo, settings.worktreeDir, homeDir);
+    return settings.excludeFromGit && base.startsWith(`${activeRepo}/`) ? base.slice(activeRepo.length + 1) : undefined;
+  };
+
+  const handleGraftPr = async (path: string, pr: string, files: ApplyEntry[], command: string) => {
+    if (!activeRepo) return [];
+    const branch = await invoke<string>('create_pr_worktree', { repoPath: activeRepo, path, pr, excludeDir: graftExcludeDir() });
+    return finishGraft(path, branch, files, command);
+  };
+
+  // After a worktree is created: add files, select it, run the setup command.
+  const finishGraft = async (path: string, branch: string, files: ApplyEntry[], command: string): Promise<FileResult[]> => {
+    if (!activeRepo) return [];
     // The worktree exists now, so a failure adding files must not fail the graft.
     let results: FileResult[] = [];
     if (files.length > 0) {
@@ -299,11 +374,22 @@ function App() {
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '4px' }}>
+                <SyncAllMenu repoPath={activeRepo} homeDir={homeDir} onDone={() => loadWorktrees(activeRepo, true)} />
+                <RunsMenu
+                  runs={Object.values(runs.runs)}
+                  onView={(run) => setRunTarget({ path: run.worktreePath, label: run.label, command: run.command, runId: run.id })}
+                  onStop={runs.stop}
+                />
+                {remoteLoading && !isLoadingWorktrees && (
+                  <span className="remote-checking" title="Checking which branches still exist on the remote, and their pull requests">
+                    <Loader2 size={13} className="loading-spinner" /> Checking remote…
+                  </span>
+                )}
                 <button
                   type="button"
                   className="btn-graft"
                   style={{ padding: '10px 20px', border: '1px solid rgba(255,255,255,0.08)' }}
-                  onClick={() => loadWorktrees(activeRepo)}
+                  onClick={() => loadWorktrees(activeRepo, true)}
                   disabled={isLoadingWorktrees}
                   title="Refresh Git Worktrees"
                 >
@@ -342,21 +428,28 @@ function App() {
             {selectedWt && (
               <DetailsPanel
                 worktree={selectedWt}
-                repoPath={activeRepo}
+                baseBranch={
+                  settings.repoDefaultBranch[activeRepo] ||
+                  (githubDefault?.repo === activeRepo ? githubDefault.name : null)
+                }
                 side={popupSide}
                 homeDir={homeDir}
                 onClose={() => setSelectedWt(null)}
                 editorLabel={editor?.label ?? null}
                 onOpenInEditor={handleOpenInEditor}
                 onAddFiles={hasUsableFiles(repoFiles) ? () => setFilesTarget(selectedWt) : undefined}
-                onRunCommand={() =>
-                  setRunTarget({
-                    path: selectedWt.path,
-                    label: selectedWt.branch ?? selectedWt.path.split('/').pop() ?? selectedWt.path,
-                    command: '',
-                    autoRun: false,
-                  })
-                }
+                terminalLabel={terminal?.label ?? null}
+                onOpenInTerminal={handleOpenInTerminal}
+                onRunCommand={() => setRunTarget({ path: selectedWt.path, label: wtLabel(selectedWt), command: '' })}
+                savedCommands={settings.repoCommands[activeRepo] ?? []}
+                runs={Object.values(runs.runs).filter((r) => r.worktreePath === selectedWt.path)}
+                onRunSaved={async (command) => {
+                  const runId = await runs.start(activeRepo, selectedWt.path, wtLabel(selectedWt), command);
+                  setRunTarget({ path: selectedWt.path, label: wtLabel(selectedWt), command, runId });
+                }}
+                onViewRun={(run) => setRunTarget({ path: run.worktreePath, label: run.label, command: run.command, runId: run.id })}
+                onStopRun={runs.stop}
+                onDismissRun={runs.dismiss}
                 onDeleteWorktree={handleDeleteWorktree}
                 onRefresh={() => loadWorktrees(activeRepo, true)}
               />
@@ -386,13 +479,14 @@ function App() {
 
             {runTarget && (
               <CommandModal
-                key={`${runTarget.path}:${runTarget.command}`}
+                key={runTarget.runId ?? runTarget.path}
+                runs={runs}
+                runId={runTarget.runId ?? null}
                 repoPath={activeRepo}
                 worktreePath={runTarget.path}
                 homeDir={homeDir}
                 label={runTarget.label}
                 initialCommand={runTarget.command}
-                autoRun={runTarget.autoRun}
                 history={settings.repoCommandHistory[activeRepo] ?? []}
                 onRan={rememberCommand}
                 onClose={() => setRunTarget(null)}
@@ -411,6 +505,7 @@ function App() {
                 linkModes={linkModes}
                 onClose={() => setShowGraftModal(false)}
                 onSubmit={handleGraftSubmit}
+                onSubmitPr={handleGraftPr}
               />
             )}
           </>
@@ -439,6 +534,7 @@ function App() {
           activeRepo={activeRepo}
           homeDir={homeDir}
           editors={editors}
+          terminals={terminals}
           onChange={updateSettings}
           onClose={() => setShowSettings(false)}
         />

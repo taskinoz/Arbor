@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { WorktreeInfo } from '../types';
 import { RefreshCw, Plus, Minus, Maximize2, Search, X, Trash2 } from 'lucide-react';
 import { toDisplayPath } from '../utils/path';
+import { HoverCard } from './HoverCard';
 
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 3;
@@ -28,6 +29,26 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   onRemoveShown,
 }) => {
   const [hoveredWt, setHoveredWt] = useState<string | null>(null);
+  // The hover card shows after a short pause on a node, so sweeping the
+  // mouse across the tree doesn't flash cards.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const hoverTimer = useRef<number | undefined>(undefined);
+  const [hoverCard, setHoverCard] = useState<{ path: string; x: number; y: number; flip: boolean } | null>(null);
+  const enterNode = (path: string, e: React.MouseEvent) => {
+    setHoveredWt(path);
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = e.clientX - rect.left;
+    const card = { path, x, y: Math.min(Math.max(e.clientY - rect.top, 140), rect.height - 140), flip: x > rect.width - 320 };
+    window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => setHoverCard(card), 350);
+  };
+  const leaveNode = () => {
+    setHoveredWt(null);
+    window.clearTimeout(hoverTimer.current);
+    setHoverCard(null);
+  };
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
 
   // Dimensions of the tree's own coordinate space (node layout math below is
   // all relative to this - unchanged regardless of pan/zoom/padding).
@@ -293,8 +314,13 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     );
   }
 
+  const hovered = hoverCard && worktrees.find((w) => w.path === hoverCard.path);
+
   return (
-    <div className="canvas-container">
+    <div className="canvas-container" ref={containerRef}>
+      {hovered && hoverCard && (
+        <HoverCard wt={hovered} statusClass={getStatusClass(hovered)} x={hoverCard.x} y={hoverCard.y} flip={hoverCard.flip} />
+      )}
       {isLoading && (
         <div className="canvas-loading-overlay">
           <RefreshCw className="loading-spinner" size={28} />
@@ -398,8 +424,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   if (suppressClickRef.current) return;
                   onSelectWt(b.wt, isLeft ? 'left' : 'right');
                 }}
-                onMouseEnter={() => setHoveredWt(b.wt.path)}
-                onMouseLeave={() => setHoveredWt(null)}
+                onMouseEnter={(e) => enterNode(b.wt.path, e)}
+                onMouseLeave={leaveNode}
+                onMouseDown={leaveNode}
               >
                 {/* Pulse Ring for Selected */}
                 {isSelected && (
@@ -460,8 +487,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                   if (suppressClickRef.current) return;
                   onSelectWt(mainWt, 'right');
                 }}
-                onMouseEnter={() => setHoveredWt(mainWt.path)}
-                onMouseLeave={() => setHoveredWt(null)}
+                onMouseEnter={(e) => enterNode(mainWt.path, e)}
+                onMouseLeave={leaveNode}
+                onMouseDown={leaveNode}
               >
                 {/* Pulsing ring for main selected */}
                 {isSelected && (

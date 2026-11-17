@@ -35,8 +35,14 @@ pub struct Editor {
     label: &'static str,
 }
 
-fn mac_app_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![PathBuf::from("/Applications"), PathBuf::from("/System/Applications")];
+pub(crate) fn mac_app_dirs() -> Vec<PathBuf> {
+    // Utilities is where macOS keeps Terminal.
+    let mut dirs = vec![
+        PathBuf::from("/Applications"),
+        PathBuf::from("/Applications/Utilities"),
+        PathBuf::from("/System/Applications"),
+        PathBuf::from("/System/Applications/Utilities"),
+    ];
     if let Ok(home) = std::env::var("HOME") {
         dirs.push(Path::new(&home).join("Applications"));
     }
@@ -54,7 +60,7 @@ fn find_mac_app(def: &EditorDef) -> Option<&'static str> {
         .find(|app| dirs.iter().any(|d| d.join(format!("{app}.app")).exists()))
 }
 
-fn find_cli(name: &str) -> Option<PathBuf> {
+pub(crate) fn find_cli(name: &str) -> Option<PathBuf> {
     let path = crate::augmented_path();
     let exts: &[&str] = if cfg!(windows) { &["", ".exe", ".cmd", ".bat"] } else { &[""] };
     std::env::split_paths(&path)

@@ -7,6 +7,7 @@ import { Settings } from '../settings';
 import { Editor, LinkMode, RepoFiles } from '../types';
 import { EMPTY_FILES } from './FilePicker';
 import { FileListEditor } from './FileListEditor';
+import { SavedCommandsEditor } from './SavedCommandsEditor';
 
 interface SettingsModalProps {
   settings: Settings;
@@ -15,6 +16,7 @@ interface SettingsModalProps {
   activeRepo: string | null;
   homeDir: string | null;
   editors: Editor[];
+  terminals: Editor[];
   onChange: (patch: Partial<Settings>) => void;
   onClose: () => void;
 }
@@ -26,6 +28,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   activeRepo,
   homeDir,
   editors,
+  terminals,
   onChange,
   onClose,
 }) => {
@@ -192,6 +195,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <span className="settings-hint">Detected from your installed apps and PATH.</span>
             </div>
           )}
+          {terminals.length > 0 && (
+            <div className="form-group">
+              <span className="form-label">Terminal</span>
+              <select
+                className="form-select"
+                aria-label="Terminal"
+                value={terminals.some((t) => t.id === settings.openTerminalWith) ? settings.openTerminalWith : terminals[0].id}
+                onChange={(e) => onChange({ openTerminalWith: e.target.value })}
+              >
+                {terminals.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </section>
 
         <section className="settings-section">
@@ -296,6 +314,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   Optional. Offered in the Graft dialog and run in the new worktree; you can change or clear it per graft.
                 </span>
               </div>
+              <SavedCommandsEditor
+                commands={settings.repoCommands[repo] ?? []}
+                onChange={(commands) => onChange({ repoCommands: { ...settings.repoCommands, [repo]: commands } })}
+              />
               <FileListEditor
                 title="Agent files"
                 hint="Instruction files such as CLAUDE.md. Targets are paths inside the worktree."

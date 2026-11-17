@@ -185,6 +185,15 @@ pub async fn run_command(
     .await
 }
 
+// Runs outlive their dialog, so stop them all when Arbor quits rather than
+// leaving dev servers running with nothing to stop them from.
+pub fn stop_all(app: &AppHandle) {
+    let pids: Vec<u32> = app.state::<Running>().0.lock().unwrap().values().copied().collect();
+    for pid in pids {
+        kill_tree(pid);
+    }
+}
+
 #[tauri::command]
 pub fn stop_command(app: AppHandle, run_id: String) {
     let pid = app.state::<Running>().0.lock().unwrap().get(&run_id).copied();
