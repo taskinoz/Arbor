@@ -1726,7 +1726,7 @@
 .run-state.error { color: var(--accent-red); }
 
 .panel-action-pair { display: flex; gap: 8px; }
-.panel-action-pair .btn-action { flex: 1; min-width: 0; justify-content: flex-start; white-space: nowrap; }
+.panel-action-pair .btn-action { flex: 1; min-width: 0; white-space: nowrap; }
 .panel-action-pair .btn-action span { overflow: hidden; text-overflow: ellipsis; }
 
 .saved-commands { display: flex; flex-wrap: wrap; gap: 6px; }

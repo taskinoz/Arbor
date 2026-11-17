@@ -506,7 +506,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
           </button>
           <button type="button" className="btn-action secondary" onClick={onRunCommand}>
             <Terminal size={16} />
-            <span>Run command</span>
+            <span>Run</span>
           </button>
         </div>
 
